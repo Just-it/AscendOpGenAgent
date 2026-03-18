@@ -1,0 +1,22 @@
+# KernelBench Evaluator 配置文件示例
+
+# 必需参数
+agent_workspaces:
+  - "/mnt/w00934874/agent/code/AscendOpGenAgent/akg-triton/.opencode"
+
+levels:
+  - 1
+  - 2
+
+# 可选参数
+benchmark_path: "/mnt/w00934874/agent/benchmark/KernelBench"
+output_root: "./benchmark_results"
+problem_ids: null
+arch: "ascend910b1"
+max_workers: 4
+resume: true
+timeout_per_task: 600
+warmup: 5
+repeats: 50
+save_generated_code: true
+save_failed_cases: true

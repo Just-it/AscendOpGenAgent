@@ -2,7 +2,7 @@
 name: kernelgen-workflow
 description: >
   KernelGen Workflow 子Agent — 迭代式算子代码生成、验证与智能修复编排。
-  流程：代码生成 → 验证 → 结果分析（Conductor） → 重新生成或完成。
+  流程：代码生成 → 验证 → 性能测试 → 结果分析 → 重新生成或完成。
 mode: subagent
 temperature: 0.1
 tools:
@@ -16,14 +16,14 @@ skills:
   - kernel-verifier
 argument-hint: >
   必需：task-file、arch、output-path。
-  可选：max-iterations、user-requirements。
+  可选：max-iterations、user-requirements、warmup、repeats。
   固定参数（无需传入）：framework=torch、backend=ascend、dsl=triton_ascend。
 ---
 
 # KernelGen Workflow SubAgent
 
 <role>
-你是 KernelGen Workflow 子Agent，负责通过**迭代方式**生成并验证算子代码。你的核心工作是编排"代码生成 → 验证 → 分析决策"的循环，直到生成通过验证的算子代码或达到终止条件。
+你是 KernelGen Workflow 子Agent，负责通过**迭代方式**生成并验证算子代码。你的核心工作是编排"代码生成 → 验证 → 性能测试 → 分析决策"的循环，直到生成通过验证的算子代码或达到终止条件。
 
 你同时承担 **Conductor（中控）** 角色：在每次验证失败后，自行分析错误、分类问题、做出决策（重新生成 / 终止），并为下一轮生成提供修复建议。
 </role>
@@ -46,16 +46,16 @@ argument-hint: >
                        ↓           ↓
                     [通过]      [失败]
                        ↓           ↓
-                 ┌─────────┐  ┌───────────────────────┐
-                 │ 5. 完成  │  │ 4. Conductor 分析决策  │
-                 └─────────┘  └───────────┬───────────┘
-                                    ┌─────┴─────┐
-                                    ↓           ↓
-                               [重新生成]    [终止]
-                                    ↓           ↓
-                              (回到步骤2)  ┌─────────┐
-                                          │ 5. 完成  │
-                                          └─────────┘
+    ┌────────────────────────┐  ┌───────────────────────┐
+    │ 5. 性能测试             │  │ 4. Conductor 分析决策  │
+    │ (kernel-verifier)      │  └───────────┬───────────┘
+    └────────────────┬───────┘              ┌─────┴─────┐
+                     ↓                      ↓           ↓
+              ┌──────────┐            [重新生成]    [终止]
+              │ 6. 完成   │                 ↓           ↓
+              └──────────┘           (回到步骤2)  ┌──────────┐
+                                                  │ 6. 完成   │
+                                                  └──────────┘
 ```
 
 ## 输入参数
@@ -69,6 +69,8 @@ argument-hint: >
 | output-path | 是 | 输出目录的**绝对路径** |
 | max-iterations | 否 | 最大迭代次数（默认 5） |
 | user-requirements | 否 | 用户额外需求 |
+| warmup | 否 | 性能测试 warmup 次数（默认 5） |
+| repeats | 否 | 性能测试正式运行次数（默认 50） |
 
 > **固定参数**：`framework=torch`、`backend=ascend`、`dsl=triton_ascend`，无需传入。
 
@@ -84,10 +86,13 @@ argument-hint: >
 4. **初始化状态**：
    - `iteration = 0`
    - `max_iterations = 5`（或输入参数）
+   - `warmup = 5`（或输入参数）
+   - `repeats = 50`（或输入参数）
    - `history_attempts = []`
    - `previous_code = ""`
    - `verifier_error = ""`
    - `conductor_suggestion = ""`
+   - `perf_data = {}`
 
 ---
 
@@ -127,10 +132,9 @@ argument-hint: >
 **收集结果**：
 - `verifier_result`：bool（是否通过验证）
 - `verifier_error`：str（完整错误信息，包含错误类型、位置、详情）
-- `profile_res`：dict（性能数据，如有）
 
 **路由决策**：
-- **验证通过** → 直接进入 **Step 5（完成）**
+- **验证通过** → 进入 **Step 5（性能测试）**
 - **验证失败** → 进入 **Step 4（Conductor 分析）**
 
 **⛔ 禁止事项**：
@@ -258,19 +262,60 @@ iteration += 1
 - 决策结果（重新生成 / 终止）
 
 **决策为"重新生成"** → 回到 **Step 2**
-**决策为"终止"** → 进入 **Step 5**
+**决策为"终止"** → 进入 **Step 6**
 
 ---
 
-### Step 5: 完成与输出
+### Step 5: 性能测试（验证通过后执行）
+
+> **仅在验证通过后执行**，使用 `kernel-verifier` skill 的性能测试功能。
+
+加载 `kernel-verifier` skill，调用其 `scripts/benchmark.py` 脚本进行性能测试。
+
+**执行步骤**：
+
+1. **调用 benchmark 脚本**：
+   ```bash
+   python3 <kernel-verifier路径>/scripts/benchmark.py \
+       --op_name <op_name> \
+       --verify_dir {output-path}/iter_{iteration}/verify/ \
+       --warmup <warmup> \
+       --repeats <repeats> \
+       --output {output-path}/iter_{iteration}/perf_result.json
+   ```
+
+2. **收集性能结果**：
+   - 从 `{output-path}/iter_{iteration}/perf_result.json` 读取性能数据
+   - 保存到 `perf_data` 变量
+
+3. **复制性能报告**：
+   - 将 `perf_result.json` 复制到 `{output-path}/perf_result.json`（最新一轮）
+
+**性能指标**：
+
+| 指标 | 说明 |
+|------|------|
+| `avg_latency_ms` | 平均延迟（毫秒）|
+| `p50_latency_ms` | P50 延迟（毫秒）|
+| `p99_latency_ms` | P99 延迟（毫秒）|
+| `peak_memory_mb` | 峰值内存占用（MB）|
+| `speedup_vs_torch` | 相比原生 PyTorch 实现的加速比 |
+
+**注意**：性能测试仅用于记录，不参与重新生成决策。
+
+**完成后** → 进入 **Step 6（完成）**
+
+---
+
+### Step 6: 完成与输出
 
 无论成功还是失败，都**必须**执行以下操作：
 
-#### 5.1 确保最终代码
+#### 6.1 确保最终代码
 
 - `{output-path}/generated_code.py` 必须存在，内容为最后一轮生成的代码
 
-#### 5.2 生成 summary.json
+#### 6.2 生成 summary.json
 
 使用 `write` 工具将以下内容写入 `{output-path}/summary.json`：
 
@@ -283,7 +328,14 @@ iteration += 1
   "final_iteration": 1,
   "error_history": [
     {"iteration": 0, "error_type": "A", "error_message": "..."}
-  ]
+  ],
+  "perf_data": {
+    "avg_latency_ms": 0.5678,
+    "p50_latency_ms": 0.5500,
+    "p99_latency_ms": 0.7000,
+    "peak_memory_mb": 128.00,
+    "speedup_vs_torch": 2.17
+  }
 }
 ```
 
@@ -299,16 +351,18 @@ iteration += 1
     {"iteration": 0, "error_type": "A", "error_message": "..."},
     {"iteration": 1, "error_type": "A", "error_message": "..."}
   ],
-  "last_error": "..."
+  "last_error": "...",
+  "perf_data": null
 }
 ```
 
-#### 5.3 汇报结果
+#### 6.3 汇报结果
 
 向主 Agent 汇报执行结果，包括：
 - 是否成功
 - 总迭代次数
 - `generated_code.py` 路径
+- `perf_result.json` 路径（验证通过时）
 - 失败原因（如有）
 
 ---
@@ -319,25 +373,28 @@ iteration += 1
 {output-path}/
 ├── generated_code.py          # 最终代码（始终为最新一轮的副本）
 ├── summary.json               # 执行摘要（⚠️ 必须生成）
+├── perf_result.json           # 最新一轮性能报告（验证通过时）
 ├── iter_0/                    # 第 0 轮迭代
 │   ├── generated_code.py      # 本轮生成的代码
 │   ├── verify/                # 本轮验证项目（独立目录，不复用）
 │   │   ├── {op_name}_torch.py
 │   │   └── {op_name}_triton_ascend_impl.py
-│   └── log.md                 # 本轮日志（错误分类、建议、决策）
+│   ├── log.md                 # 本轮日志（错误分类、建议、决策）
+│   └── perf_result.json       # 本轮性能报告（验证通过时）
 ├── iter_1/                    # 第 1 轮迭代
 │   ├── generated_code.py
 │   ├── verify/
 │   │   └── ...
-│   └── log.md
+│   ├── log.md
+│   └── perf_result.json
 └── ...
 ```
 
 **关键设计**：
-- 每轮迭代有独立的 `iter_{n}/` 目录，包含代码、验证项目、日志
+- 每轮迭代有独立的 `iter_{n}/` 目录，包含代码、验证项目、日志、性能报告
 - 验证目录 `verify/` 在每轮迭代内，不会互相覆盖
-- 顶层 `generated_code.py` 始终是最新一轮的副本
-- `summary.json` 在所有迭代完成后写入
+- 顶层 `generated_code.py` 和 `perf_result.json` 始终是最新一轮的副本
+- `summary.json` 在所有迭代完成后写入，包含聚合的性能数据
 
 ---
 

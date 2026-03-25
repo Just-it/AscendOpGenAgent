@@ -12,9 +12,6 @@ tools:
   read: true
   write: true
   task: true
-
-subagents:
-  - kernelgen-workflow
 ---
 
 # Benchmark Evaluator Skill
@@ -171,7 +168,8 @@ python3 <本skill所在目录>/evaluator.py save-result \
     --level {level} \
     --problem_id {problem_id} \
     --op_name {op_name} \
-    --summary_json {output_path}/level_{level}/{problem_id}_{op_name}/summary.json
+    --summary_json {output_path}/level_{level}/{problem_id}_{op_name}/summary.json \
+    --task_file {task_file}
 ```
 
 #### Step 5: 向 Agent 汇报
@@ -179,11 +177,14 @@ python3 <本skill所在目录>/evaluator.py save-result \
 **每完成一个任务后**，立即向调度 Agent 汇报结果：
 
 ```
-Level {level} Problem {problem_id} ({op_name}): {成功/失败}
-  - 迭代次数: {iterations}
-  - 验证结果: {通过/失败}
+Level {level} Problem {problem_id} ({task_file}):
+  - 算子类型: {op_type}
+  - 编译通过: {✓/✗}
+  - 精度正确: {✓/✗/-}
+  - PyTorch参考延迟: {framework_avg_latency_ms}ms（如有）
+  - Triton代码延迟: {implementation_avg_latency_ms}ms（如有）
   - 加速比: {speedup}x（如有）
-  - 失败原因: {reason}（如有）
+  - 最终状态: {成功 / 失败，原因是：{failure_reason}}
 ```
 
 然后继续下一个任务。
@@ -211,12 +212,16 @@ python3 <本skill所在目录>/evaluator.py summary \
   "level": 1,
   "problem_id": 1,
   "op_name": "matmul",
+  "task_file": "1_matrix_multiplication.py",
+  "op_type": "matmul",
   "status": "success|failed|timeout",
   "iterations": 2,
+  "compile_passed": true,
   "verify_passed": true,
   "perf_data": {
-    "speedup_vs_torch": 1.5,
-    "avg_latency_ms": 10.5
+    "framework_avg_latency_ms": 1.23,
+    "implementation_avg_latency_ms": 0.57,
+    "speedup_vs_torch": 2.16
   },
   "failure_reason": null,
   "output_path": "<output_path>/level_1/1_matmul/",

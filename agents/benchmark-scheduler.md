@@ -151,15 +151,46 @@ def resolve_benchmark_path(agent_workspace, benchmark_path=None):
 **报告生成**：
 - 文件路径：`{output_path}/agent_report.md`
 - 生成时机：每次收到 Skill 返回的任务结果后**增量更新**
-- 报告内容：
-  - 执行摘要（时间、硬件、评测范围）
-  - 总体统计（编译成功率、正确率、加速比）
-  - 按算子类型统计
-  - 编译失败列表
-  - 数值验证失败列表
-  - 性能劣化列表
-  - 详细结果表
-  - 异常任务重试记录
+- 报告格式：
+
+```markdown
+# Benchmark 评测报告
+
+- Agent: {agent_name}
+- 时间: {timestamp}
+- 硬件: {arch}, NPU {npu_id}
+- 评测范围: {level_problems}
+
+## 总体统计
+
+- 总任务数: {total}
+- 编译通过: {compile_pass_count}/{total}
+- 精度正确: {accuracy_pass_count}/{total}
+- 平均加速比: {avg_speedup}x
+
+## 详细结果
+
+| Level | Problem ID | 算子名称 | 算子类型 | 编译通过 | 精度正确 | PyTorch参考延迟(ms) | Triton代码延迟(ms) | 加速比 | 最终状态 |
+|-------|-----------|---------|---------|---------|---------|-------------------|------------------|-------|---------|
+| 1 | 1 | 1_matrix_multiplication.py | MatMul | ✓ | ✓ | 1.23 | 0.57 | 2.16x | 成功 |
+| 1 | 2 | 2_softmax.py | Reduce | ✓ | ✗ | 0.89 | - | - | 失败，原因是：精度验证未通过 |
+| 1 | 3 | 3_conv2d.py | Conv | ✗ | - | - | - | - | 失败，原因是：编译错误 |
+```
+
+**字段取值规则**：
+
+| 字段 | 数据来源 | 说明 |
+|------|---------|------|
+| Level | `eval_result.json` → `level` | Level 编号 |
+| Problem ID | `eval_result.json` → `problem_id` | 题目编号 |
+| 算子名称 | 原始任务文件名（如 `1_matrix_multiplication.py`） | 保留 `{id}_{name}.py` 完整格式 |
+| 算子类型 | `eval_result.json` → `op_type` | 由 `classify_op_type` 分类 |
+| 编译通过 | `summary.json` → `success` 或 `error_history` | 若首轮能编译即 ✓；否则 ✗ |
+| 精度正确 | `eval_result.json` → `verify_passed` | ✓ 或 ✗；编译未通过则填 `-` |
+| PyTorch参考延迟 | `perf_result.json` → `framework.avg_latency_ms` | 仅验证通过时有值，否则 `-` |
+| Triton代码延迟 | `perf_result.json` → `implementation.avg_latency_ms` | 仅验证通过时有值，否则 `-` |
+| 加速比 | `perf_result.json` → `speedup_vs_torch`（= PyTorch延迟 / Triton延迟）| 格式 `{value}x`；无性能数据则 `-` |
+| 最终状态 | `eval_result.json` → `status` + `failure_reason` | 成功 → `成功`；失败 → `失败，原因是：{failure_reason}` |
 
 ### 6. 异常重试策略
 

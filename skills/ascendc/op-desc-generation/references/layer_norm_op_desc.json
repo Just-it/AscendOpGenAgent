@@ -1,0 +1,27 @@
+{
+  "op_name": "layer_norm",
+  "category": "normalization",
+  "description": "Layer normalization operation with learnable scale and bias parameters",
+  "shape_info": {
+    "input_shapes": [
+      {
+        "name": "x",
+        "shape": [32, 768],
+        "dtype": "float32"
+      }
+    ],
+    "output_shapes": [
+      {
+        "name": "output",
+        "shape": [32, 768],
+        "dtype": "float32"
+      }
+    ]
+  },
+  "attributes": {
+    "normalized_shape": [768],
+    "eps": 1e-5,
+    "elementwise_affine": true,
+    "normalized_dim": 1
+  }
+}

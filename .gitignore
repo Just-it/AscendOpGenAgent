@@ -1,7 +1,14 @@
-node_modules
+# 依赖
+node_modules/
 package.json
 bun.lock
-benchmark_results/*
-benchmark_eval*
-kernel_meta/*
-__pycache__/*
+
+# 输出
+benchmark_results/
+output/
+triton_ascend_output/
+
+# 编译产物
+kernel_meta/
+__pycache__/
+*.pyc

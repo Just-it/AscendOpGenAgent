@@ -167,7 +167,6 @@ ${pwd}/triton_ascend_output/op_{op_name}_{YYYYMMDD_HHMM}_{4位随机数}/
 ├── {op_name}_generated.py        # 用户接受的最终生成算子代码（Phase 3 产出）
 ├── output/                       # 各次工作流运行输出
 │   └── kernelgen-workflow_0/     # 第 1 次运行工作流
-│       ├── sketch.txt            #   算法草图
 │       ├── generated_code.py     #   最终代码（最新一轮副本）
 │       ├── summary.json          #   执行摘要
 │       ├── iter_0/               #   第 0 轮迭代

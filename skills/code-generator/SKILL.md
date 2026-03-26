@@ -1,11 +1,11 @@
 ---
-name: kernel-generator
+name: code-generator
 description: >
   Triton Ascend 算子代码生成 Skill — 根据 KernelBench 格式任务描述生成高性能
   Triton Ascend 内核代码。支持首次生成和基于错误反馈的迭代优化。
 argument-hint: >
   输入：op_name、task_desc（任务文件内容）、arch。
-  可选：sketch（算法草图）、previous_code、verifier_error、conductor_suggestion、user_requirements。
+  可选：previous_code、verifier_error、conductor_suggestion、user_requirements。
   输出：包含 ModelNew 类的完整内核代码。
   固定参数：backend=ascend、framework=torch、dsl=triton_ascend。
 ---
@@ -28,9 +28,8 @@ argument-hint: >
 你将获得以下信息：
 
 1. **任务描述和规格说明** — KernelBench 格式的算子需求（包含 `Model` 类）
-2. **算法设计草图**（`sketch`） — kernel-designer 生成的算法草图（首次生成时由 workflow 传入）
-3. **相关的知识和示例** — Triton Ascend 编程知识（见下方知识加载规则）
-4. **执行历史** — 之前的错误信息和修复建议（迭代生成时）
+2. **相关的知识和示例** — Triton Ascend 编程知识（见下方知识加载规则）
+3. **执行历史** — 之前的错误信息和修复建议（迭代生成时）
 
 ## 知识加载规则
 
@@ -61,14 +60,6 @@ argument-hint: >
 | Attention | self-attention/cross-attention/flash-attention/scaled-dot-product | `@references/triton-ascend-attention.md` |
 
 如果算子涉及多种类型（如融合算子），加载所有相关文档。
-
----
-
-## 算法草图使用规则
-
-当传入了 `sketch`（kernel-designer 生成的算法设计草图）时，**必须以草图为基础进行代码实现** ，充分利用其中的算法思路和优化策略。
-
-如果没有传入 `sketch`，则根据 `task_desc` 自行设计实现方案。
 
 ---
 

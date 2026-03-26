@@ -131,7 +131,7 @@ AscendOpGenAgent/
 │   └── kernelgen-workflow.md   # 子 Agent（代码生成工作流）
 ├── skills/                     # Skill 实现目录
 │   ├── op-task-extractor/      # 任务提取 Skill
-│   ├── code-generator/         # 代码生成 Skill
+│   ├── kernel-generator/       # 代码生成 Skill
 │   ├── kernel-verifier/        # 验证与性能测试 Skill
 │   └── benchmark-evaluator/    # 批量评测 Skill
 ├── benchmarks/                 # 评测数据集存放目录

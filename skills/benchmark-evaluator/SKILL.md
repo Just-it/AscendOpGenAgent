@@ -136,7 +136,7 @@ mkdir -p {output_path}/level_{level}/{problem_id}_{op_name}
 ```
 task(
   subagent_type="kernelgen-workflow",
-  load_skills=["code-generator", "kernel-verifier"],
+  load_skills=["kernel-designer", "kernel-generator", "kernel-verifier"],
   description="评测 Level{level} Problem{problem_id} {op_name} 算子",
   prompt="任务文件路径: {task_file}\n输出路径: {output_path}/level_{level}/{problem_id}_{op_name}/\narch: {arch}\n框架: torch\n后端: ascend\nDSL: triton_ascend\nwarmup: {warmup}\nrepeats: {repeats}\n\n请直接执行生成和验证流程。",
   run_in_background=false
@@ -145,7 +145,7 @@ task(
 
 **参数说明**：
 - `subagent_type`: 固定为 `kernelgen-workflow`
-- `load_skills`: 传 `["code-generator", "kernel-verifier"]`，显式加载 SubAgent 所需 skill
+- `load_skills`: 传 `["kernel-designer", "kernel-generator", "kernel-verifier"]`，显式加载 SubAgent 所需 skill
 - `run_in_background`: 设为 `false`，同步等待完成
 
 #### Step 3: 收集结果

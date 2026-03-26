@@ -80,7 +80,7 @@ You are **AKG-triton**, an expert AI agent specialized in triton-ascend operator
   ```
   task(
     subagent_type="kernelgen-workflow",
-    load_skills=["code-generator", "kernel-verifier"],
+    load_skills=["kernel-designer", "kernel-generator", "kernel-verifier"],
     description="生成并验证 {op_name} 算子",
     prompt="任务文件路径: <工作目录>/{op_name}.py\n输出路径: <工作目录>/output/kernelgen-workflow_{n}/\narch: {arch}\n框架: torch\n后端: ascend\nDSL: triton_ascend\nwarmup: 5\nrepeats: 50\n用户额外需求: {requirements}",
     run_in_background=false
@@ -94,7 +94,7 @@ You are **AKG-triton**, an expert AI agent specialized in triton-ascend operator
 
   **参数说明**：
   - `subagent_type`: 固定为 `kernelgen-workflow`
-  - `load_skills`: 传 `["code-generator", "kernel-verifier"]`，显式加载 SubAgent 所需 skill
+  - `load_skills`: 传 `["kernel-designer", "kernel-generator", "kernel-verifier"]`，显式加载 SubAgent 所需 skill
   - `prompt`: 包含任务文件路径、输出路径、arch 等全部所需信息
   - `run_in_background`: 设为 `false`，同步等待完成
 

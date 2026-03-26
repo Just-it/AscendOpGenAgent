@@ -128,7 +128,7 @@ AscendOpGenAgent/
 │   └── kernelgen-workflow.md   # Sub-Agent (Code generation workflow)
 ├── skills/                     # Skill implementation directory
 │   ├── op-task-extractor/      # Task extraction Skill
-│   ├── code-generator/         # Code generation Skill
+│   ├── kernel-generator/       # Code generation Skill
 │   ├── kernel-verifier/        # Verification and performance testing Skill
 │   └── benchmark-evaluator/    # Batch evaluation Skill
 ├── benchmarks/                 # Evaluation dataset storage directory

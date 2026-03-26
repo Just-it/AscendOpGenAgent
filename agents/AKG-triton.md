@@ -20,6 +20,7 @@ tools:
 skills:
   - op-task-extractor
   - kernel-verifier
+  - npu-profiler
 
 # SubAgent Registry
 subagents:

@@ -15,6 +15,7 @@ skills:
   - kernel-designer
   - kernel-generator
   - kernel-verifier
+  - npu-profiler
 argument-hint: >
   必需：task-file、arch、output-path。
   可选：max-iterations、user-requirements、warmup、repeats。
@@ -51,16 +52,20 @@ argument-hint: >
             │              ↓           ↓
             │           [通过]      [失败]
             │              ↓           ↓
-            │    ┌──────────────┐ ┌──────────────────────┐
-            │    │ 5. 性能测试  │ │ 6. Conductor 分析决策 │
-            │    └──────┬───────┘ └──────────┬───────────┘
-            │           ↓              ┌─────┴─────┐
-            │    ┌──────────────┐      ↓           ↓
-            │    │   7. 完成    │  [重新生成]    [终止]
-            │    └──────────────┘      ↓           ↓
-            │                          │    ┌──────────────┐
-            └──────────────────────────┘    │   7. 完成    │
-                                            └──────────────┘
+            │    ┌────────┴────────┐ ┌──────────────────────┐
+            │    │ 5. 性能测试     │ │ 6. Conductor 分析决策 │
+            │    │ (kernel-verifier│ │(认证失败后自我决策)  │
+            │    └────────┬────────┘ └──────────┬───────────┘
+            │             ↓                     ┌─────┴─────┐
+            │    ┌───────────────────┐         ↓           ↓
+            │    │ 5.1 NPU 详细分析  │   [重新生成]    [终止]
+            │    │ (npu-profiler)    │         ↓           ↓
+            │    │ 失败不影响流程    │         │    ┌──────────────┐
+            │    └────────┬──────────┘         └────┤   7. 完成    │
+            │             ↓                         └───────────────┘
+            │    ┌────────┴──────────┐
+            └────┤ 7. 完成           │
+                 └───────────────────┘
 ```
 
 ## 输入参数
@@ -289,6 +294,56 @@ class ModelNew(nn.Module):
 
 **注意**：性能测试仅用于记录，不参与重新生成决策。
 
+**完成后** → 进入 **Step 5.1（NPU Profiler 性能分析）**
+
+---
+
+### Step 5.1: NPU Profiler 性能分析（性能测试后必须执行，失败不影响流程）
+
+> **仅在 Step 5 性能测试通过后执行**，使用 `npu-profiler` skill 进行关键指标采集。执行失败不影响后续流程，仅记录失败信息。
+
+**Step 5.1 失败处理原则**：
+
+- 如果 `npu-profiler` 执行失败，**不入 log.md 也不进行 Conductor 分析决策**，仅记录失败信息
+- NPU Profiler 失败**不会触发重新生成**，直接进入 Step 7 完成阶段
+- 失败时跳过后续的文件复制操作
+
+加载 `npu-profiler` skill，调用其 `scripts/performance-test.py` 脚本进行详细性能分析。
+
+**执行步骤**：
+
+1. **调用 performance-test 脚本**（使用 kernel-verifier 相同的 verify_dir）：
+   ```bash
+   python3 <npu-profiler路径>/scripts/performance-test.py \
+       --op_name <op_name> \
+       --verify_dir {output-path}/iter_{iteration}/verify/ \
+       --num_iterations 100 \
+       --warm_up 25 \
+       --output {output-path}/iter_{iteration}/profiling_result.json
+   ```
+
+2. **收集结果**：
+   - 读取 `{output-path}/iter_{iteration}/profiling_result.json`
+   - 如果成功，将 Profiling 数据合并存入 `perf_data`（从 Step 5 的 perf_result.json）
+   - 复制到根目录：`cp {output-path}/iter_{iteration}/profiling_result.json {output-path}/profiling_result.json`
+
+3. **失败处理（仅记录，不影响后续流程）**：
+   - 如果 profiling 失败，在 `perf_data` 中记录失败信息
+   - 不写入 log.md，也不进行 Conductor 分析决策
+   - 继续执行 Step 7（完成）
+
+**Profiling 指标**：
+
+| 指标 | 说明 |
+|------|------|
+| `device_self_duration_us` | 算子在 Device 侧的耗时（除去内部调用其他算子），单位 us |
+| `device_total_duration_us` | 算子在 Device 侧的耗时，单位 us |
+| `avg_device_self_duration_us` | Device Self Duration 的平均值 |
+| `avg_device_total_duration_us` | Device Total Duration 的平均值 |
+| `device_self_duration_speedup` | Self Duration 对框架实现的加速比 |
+| `device_total_duration_speedup` | Total Duration 对框架实现的加速比 |
+| `operator_details` | 按 Name 聚合的每个算子的平均耗时统计 |
+
 **完成后** → 进入 **Step 7（完成）**
 
 ---
@@ -442,6 +497,7 @@ iteration += 1
 **成功时**（至少有一轮验证通过）：
 - `{output-path}/generated_code.py` 必须存在（已在 Step 3 验证通过时复制）
 - `{output-path}/perf_result.json` 必须存在（已在 Step 5 复制）
+- `{output-path}/profiling_result.json` 可选（Step 5.1 成功时存在，失败时不影响完成）
 
 **失败时**（所有迭代均验证失败）：
 - `{output-path}/generated_code.py` **不应存在**（已在 Step 3 验证失败时删除）
@@ -507,19 +563,22 @@ iteration += 1
 ├── sketch.txt                 # 算法草图（Step 2 产出）
 ├── summary.json               # 执行摘要（⚠️ 必须生成）
 ├── perf_result.json           # 最终验证通过的性能报告（仅验证通过时存在）
+├── profiling_result.json      # NPU Profiling 详细结果（仅 Step 5.1 成功时存在）
 ├── iter_0/                    # 第 0 轮迭代（即使只有一次迭代也必须存在）
 │   ├── generated_code.py      # 本轮生成的代码
 │   ├── verify/                # 本轮验证项目（独立目录，不复用）
 │   │   ├── {op_name}_torch.py
 │   │   └── {op_name}_triton_ascend_impl.py
 │   ├── log.md                 # 本轮日志（错误分类、建议、决策）
-│   └── perf_result.json       # 本轮性能报告（仅本轮验证通过时存在）
+│   ├── perf_result.json       # 本轮性能报告（仅本轮验证通过时存在）
+│   └── profiling_result.json  # 本轮 NPU Profiling 结果（仅 Step 5.1 成功时存在）
 ├── iter_1/                    # 第 1 轮迭代（如有）
 │   ├── generated_code.py
 │   ├── verify/
 │   │   └── ...
 │   ├── log.md
-│   └── perf_result.json       # 仅本轮验证通过时存在
+│   ├── perf_result.json       # 仅本轮验证通过时存在
+│   └── profiling_result.json  # 仅 Step 5.1 成功时存在
 └── ...
 ```
 
@@ -528,6 +587,7 @@ iteration += 1
 - 每轮迭代有独立的 `iter_{n}/` 目录，包含代码、验证项目、日志、性能报告
 - 验证目录 `verify/` 在每轮迭代内，不会互相覆盖
 - 顶层 `generated_code.py` 和 `perf_result.json` 仅在验证通过时存在，为最后一次验证通过的迭代的副本
+- `profiling_result.json` 仅在 Step 5.1 执行成功时存在，失败时不生成该文件
 - 若所有迭代均失败，根目录**不包含** `generated_code.py` 和 `perf_result.json`
 - `summary.json` 在所有迭代完成后写入，包含聚合的性能数据
 

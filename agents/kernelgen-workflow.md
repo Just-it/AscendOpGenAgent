@@ -317,8 +317,8 @@ class ModelNew(nn.Module):
    python3 <npu-profiler路径>/scripts/performance-test.py \
        --op_name <op_name> \
        --verify_dir {output-path}/iter_{iteration}/verify/ \
-       --num_iterations 100 \
-       --warm_up 25 \
+       --num_iterations 50 \
+       --warm_up 5 \
        --output {output-path}/iter_{iteration}/profiling_result.json
    ```
 

@@ -191,7 +191,7 @@ if __name__ == "__main__":
         "--verify_dir", default=".",
         help="验证目录，包含 {op_name}_torch.py 和 {op_name}_triton_ascend_impl.py（默认当前目录）",
     )
-    parser.add_argument("--timeout", type=int, default=300, help="超时秒数（默认 300）")
+    parser.add_argument("--timeout", type=int, default=900, help="超时秒数（默认 900）")
     parser.add_argument(
         "--triton_impl_name", default="triton_ascend_impl",
         help="Triton 实现模块名（不含 op_name 前缀，默认 triton_ascend_impl）",

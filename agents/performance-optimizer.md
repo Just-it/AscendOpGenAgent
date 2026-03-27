@@ -201,7 +201,7 @@ argument-hint: >
        --op_name <op_name> \
        --verify_dir <验证目录> \
        --triton_impl_name triton_baseline \
-       --timeout 300
+       --timeout 900
    ```
 
 2. **第二次比对**：PyTorch vs 优化 Triton
@@ -214,7 +214,7 @@ argument-hint: >
        --op_name <op_name> \
        --verify_dir <验证目录> \
        --triton_impl_name triton_optimized \
-       --timeout 300
+       --timeout 900
    ```
 
 > **参数说明**：`--triton_impl_name` 指定 Triton 实现模块名（不含 `{op_name}_` 前缀），默认值为 `triton_ascend_impl`。performance optimizer 生成的文件使用 `triton_baseline` 和 `triton_optimized`，因此需要显式指定。

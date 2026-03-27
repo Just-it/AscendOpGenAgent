@@ -45,6 +45,12 @@ argument-hint: >
   | ascend910b2c | `@references/hw-ascend910b2c.md` |
   | ascend910b2 | `@references/hw-ascend910b2.md` |
   | ascend910b1 | `@references/hw-ascend910b1.md` |
+  | ascend910_9362 | `@references/hw-ascend910-9362.md` |
+  | ascend910_9372 | `@references/hw-ascend910-9372.md` |
+  | ascend910_9381 | `@references/hw-ascend910-9381.md` |
+  | ascend910_9382 | `@references/hw-ascend910-9382.md` |
+  | ascend910_9391 | `@references/hw-ascend910-9391.md` |
+  | ascend910_9392 | `@references/hw-ascend910-9392.md` |
 
 - `@references/triton-ascend-fundamentals.md` — API 参考、编程基础、Grid 配置、内存优化、性能优化、调试清单
 - `@references/triton-ascend-examples.md` — PyTorch + Triton Ascend 完整示例代码

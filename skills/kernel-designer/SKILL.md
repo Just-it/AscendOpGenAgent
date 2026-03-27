@@ -48,6 +48,12 @@ argument-hint: >
   | ascend910b2c | `kernel-generator/references/hw-ascend910b2c.md` |
   | ascend910b2 | `kernel-generator/references/hw-ascend910b2.md` |
   | ascend910b1 | `kernel-generator/references/hw-ascend910b1.md` |
+  | ascend910_9362 | `kernel-generator/references/hw-ascend910-9362.md` |
+  | ascend910_9372 | `kernel-generator/references/hw-ascend910-9372.md` |
+  | ascend910_9381 | `kernel-generator/references/hw-ascend910-9381.md` |
+  | ascend910_9382 | `kernel-generator/references/hw-ascend910-9382.md` |
+  | ascend910_9391 | `kernel-generator/references/hw-ascend910-9391.md` |
+  | ascend910_9392 | `kernel-generator/references/hw-ascend910-9392.md` |
 
   使用 `read` 工具读取对应架构的硬件规格文件。
 

@@ -522,12 +522,26 @@ iteration += 1
     "p50_latency_ms": 0.5500,
     "p99_latency_ms": 0.7000,
     "peak_memory_mb": 128.00,
-    "speedup_vs_torch": 2.17
+    "speedup_vs_torch": 2.17,
+    "device_self_duration_us": 8.0000,
+    "device_total_duration_us": 9.5000,
+    "device_self_duration_speedup": 1.54,
+    "device_total_duration_speedup": 1.65
+  },
+  "profiling_result": {
+    "status": "success",
+    "file_path": "{output-path}/profiling_result.json",
+    "op_name": "...",
+    "framework_avg_self_duration": 12.3456,
+    "framework_avg_total_duration": 15.6789,
+    "implementation_avg_self_duration": 8.0000,
+    "implementation_avg_total_duration": 9.5000,
+    "operator_details": [...]
   }
 }
 ```
 
-**失败时**：
+**失败时**（存在验证通过但 Step 5.1 失败的情况）：
 
 ```json
 {
@@ -541,6 +555,29 @@ iteration += 1
   ],
   "last_error": "...",
   "perf_data": null
+}
+```
+
+**仅 Step 5.1 失败时**（存在基本的 perf_data，但 profiling_result 为 failed）：
+
+```json
+{
+  "success": true,
+  "iterations": 1,
+  "final_iteration": 0,
+  "error_history": [],
+  "perf_data": {
+    "avg_latency_ms": 0.5678,
+    "p50_latency_ms": 0.5500,
+    "p99_latency_ms": 0.7000,
+    "peak_memory_mb": 128.00,
+    "speedup_vs_torch": 2.17
+  },
+  "profiling_result": {
+    "status": "failed",
+    "op_name": "...",
+    "error_message": "..."
+  }
 }
 ```
 

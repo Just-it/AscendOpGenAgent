@@ -108,7 +108,7 @@ python3 <npu-profiler路径>/scripts/performance-test.py \
 python3 /path/to/npu-profiler/scripts/performance-test.py \
     --op_name Softmax \
     --verify_dir ./output/kernelgen-workflow_0/iter_0/verify \
-    --num_iterations 100 \
-    --warm_up 25 \
+    --num_iterations 50 \
+    --warm_up 5 \
     --output ./profiling_result.json
 ```

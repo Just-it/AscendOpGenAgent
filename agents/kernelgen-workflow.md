@@ -536,6 +536,14 @@ iteration += 1
     "framework_avg_total_duration": 15.6789,
     "implementation_avg_self_duration": 8.0000,
     "implementation_avg_total_duration": 9.5000,
+    "collection_metadata": {
+      "collection_time_seconds": 45.234,
+      "profiling_overhead_seconds": 3.567,
+      "pure_execution_time_seconds": 41.667,
+      "overhead_percentage": 7.9,
+      "raw_iterations": 50,
+      "actual_profiling_iterations": 50
+    },
     "operator_details": [...]
   }
 }

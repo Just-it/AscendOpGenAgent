@@ -42,6 +42,13 @@ class ProfilingResult:
     device_self_duration_us: list[float] = field(default_factory=list)
     device_total_duration_us: list[float] = field(default_factory=list)
     operator_details: list[OperatorDuration] = field(default_factory=list)
+    
+    # 采集时间元数据
+    collection_time_seconds: float = 0.0
+    profiling_overhead_seconds: float = 0.0
+    pure_execution_time_seconds: float = 0.0
+    raw_iterations: int = 0
+    actual_profiling_iterations: int = 0
 
     @property
     def avg_device_self_duration_us(self) -> float:
@@ -54,6 +61,13 @@ class ProfilingResult:
     @staticmethod
     def _safe_average(durations: Sequence[float]) -> float:
         return sum(durations) / len(durations) if durations else 0.0
+
+    @property
+    def overhead_percentage(self) -> float:
+        """计算采集开销百分比"""
+        if self.collection_time_seconds > 0:
+            return self.profiling_overhead_seconds / self.collection_time_seconds * 100
+        return 0.0
 
 
 @dataclass
@@ -249,12 +263,15 @@ class NPUProfiler:
         torch.npu.synchronize()
 
     def _run_profiling(self, model: Any, inputs: Any, prof_dir: Path) -> None:
-        """执行 profiling 运行"""
+        """执行 profiling 运行（带时间统计）"""
         import torch
         import torch_npu
 
         total = self._calculate_total_iterations()
         experimental_config = self._create_experimental_config()
+        
+        # 记录总采集开始时间
+        collection_start = time.perf_counter()
         
         with self.npu_profile(
             activities=[self.ProfilerActivity.NPU, self.ProfilerActivity.CPU],
@@ -273,11 +290,39 @@ class NPUProfiler:
             with_stack=False,
             experimental_config=experimental_config
         ) as prof:
-            for _ in range(total):
+            # 记录纯执行开始时间
+            execution_start = time.perf_counter()
+            
+            for i in range(total):
                 with torch.no_grad():
                     _ = model(*inputs)
                 prof.step()
-                torch.npu.synchronize()
+                # 最后一个迭代后不需要手动同步，profiler 会处理
+                if i < total - 1:
+                    torch.npu.synchronize()
+            
+            # 确保所有 NPU 操作完成
+            torch.npu.synchronize()
+            
+            # 记录纯执行结束时间
+            execution_end = time.perf_counter()
+        
+        # 记录总采集结束时间
+        collection_end = time.perf_counter()
+        
+        # 计算时间
+        pure_execution_time = execution_end - execution_start
+        total_collection_time = collection_end - collection_start
+        profiling_overhead = total_collection_time - pure_execution_time
+        
+        # 保存到实例变量，供后续使用
+        self._timing_info = {
+            'collection_time': total_collection_time,
+            'execution_time': pure_execution_time,
+            'overhead_time': profiling_overhead,
+            'raw_iterations': total,
+            'actual_profiling_iterations': self.config.num_iterations
+        }
 
     def _calculate_total_iterations(self) -> int:
         """计算总迭代数"""
@@ -294,7 +339,7 @@ class NPUProfiler:
         )
 
     def _analyze_results(self, prof_dir: Path) -> ProfilingResult:
-        """分析 profiling 结果"""
+        """分析 profiling 结果（包含计时元数据）"""
         import pandas as pd
         
         analyzer = ProfilingAnalyzer()
@@ -306,7 +351,17 @@ class NPUProfiler:
             except Exception as e:
                 print(f"Warning: Failed to read {csv_path}: {e}")
         
-        return analyzer.build_result()
+        result = analyzer.build_result()
+        
+        # 合并计时信息到结果
+        if hasattr(self, '_timing_info'):
+            result.collection_time_seconds = self._timing_info['collection_time']
+            result.profiling_overhead_seconds = self._timing_info['overhead_time']
+            result.pure_execution_time_seconds = self._timing_info['execution_time']
+            result.raw_iterations = self._timing_info['raw_iterations']
+            result.actual_profiling_iterations = self._timing_info['actual_profiling_iterations']
+        
+        return result
 
     def _find_csv_files(self, prof_dir: Path) -> list[Path]:
         """查找所有 operator_details.csv 文件"""
@@ -451,7 +506,15 @@ class ProfilingRunner:
                     'avg_device_total_duration_us': round(framework_result.avg_device_total_duration_us, 4),
                     'device_self_duration_us': framework_result.device_self_duration_us,
                     'device_total_duration_us': framework_result.device_total_duration_us,
-                    'operator_details': format_details(framework_result)
+                    'operator_details': format_details(framework_result),
+                    'collection_metadata': {
+                        'collection_time_seconds': round(framework_result.collection_time_seconds, 3),
+                        'profiling_overhead_seconds': round(framework_result.profiling_overhead_seconds, 3),
+                        'pure_execution_time_seconds': round(framework_result.pure_execution_time_seconds, 3),
+                        'overhead_percentage': round(framework_result.overhead_percentage, 1),
+                        'raw_iterations': framework_result.raw_iterations,
+                        'actual_profiling_iterations': framework_result.actual_profiling_iterations
+                    }
                 },
                 'implementation': {
                     'op_name': f"{op_name}_triton_ascend_impl",
@@ -459,7 +522,15 @@ class ProfilingRunner:
                     'avg_device_total_duration_us': round(impl_result.avg_device_total_duration_us, 4),
                     'device_self_duration_us': impl_result.device_self_duration_us,
                     'device_total_duration_us': impl_result.device_total_duration_us,
-                    'operator_details': format_details(impl_result)
+                    'operator_details': format_details(impl_result),
+                    'collection_metadata': {
+                        'collection_time_seconds': round(impl_result.collection_time_seconds, 3),
+                        'profiling_overhead_seconds': round(impl_result.profiling_overhead_seconds, 3),
+                        'pure_execution_time_seconds': round(impl_result.pure_execution_time_seconds, 3),
+                        'overhead_percentage': round(impl_result.overhead_percentage, 1),
+                        'raw_iterations': impl_result.raw_iterations,
+                        'actual_profiling_iterations': impl_result.actual_profiling_iterations
+                    }
                 }
             },
             'speedup': {
@@ -512,7 +583,6 @@ def main():
     if not verify_dir.is_dir():
         print(f"错误: 验证目录不存在: {verify_dir}", file=sys.stderr)
         sys.exit(1)
-    
     try:
         config = NPUProfilerConfig(
             num_iterations=args.num_iterations,

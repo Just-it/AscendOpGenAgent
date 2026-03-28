@@ -11,5 +11,5 @@ class ModelNew(nn.Module):
     def __init__(self):
         super(ModelNew, self).__init__()
 
-    def forward(self, predictions, targets, fn=module_fn):
-        return fn(predictions, targets)
+    def forward(self, predictions, targets):
+        return module_fn(predictions, targets)

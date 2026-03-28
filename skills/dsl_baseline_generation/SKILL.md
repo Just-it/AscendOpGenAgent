@@ -11,15 +11,22 @@ Generate initial AscendDSL code with proper class structure, compute methods, an
 
 Use this after ascend call generation to create initial DSL implementation.
 
+## Input Parameters
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `op_name` | str | 是 | 算子名称 |
+| `output_dir` | str | 否 | 输出目录路径，默认为 `output/{op_name}` |
+
 ## Workflow
 
-1. Read input functional PyTorch code `{op_name}_functional.py`
+1. Read input functional PyTorch code `{output_dir}/{op_name}_functional.py` (default: `output/{op_name}/{op_name}_functional.py`)
 2. Select appropriate example:
    - read example input file in dir: `references/input_example/`
    - read example output file in dir: `references/output_example/`
 3. read ascend dsl knowledge @references/ascendDSL.py
 4. generate Ascend DSL code
-5. Save to `output/{op_name}/{op_name}_dsl.py`
+5. Save to `{output_dir}/{op_name}_dsl.py` (default: `output/{op_name}/{op_name}_dsl.py`)
 
 ### input explain
 - **[module_fn]**: a pure PyTorch functional implementation  

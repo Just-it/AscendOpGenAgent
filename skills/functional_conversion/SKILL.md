@@ -11,9 +11,40 @@ Convert PyTorch `nn.Module` classes to `torch.nn.functional` style. Removes clas
 
 Use this when converting reference PyTorch code to functional form for DSL generation.
 
+## Input Parameters
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `op_name` | str | 是 | 算子名称 |
+| `benchmark_file` | str | 否 | Benchmark 任务文件路径（Benchmark 模式） |
+| `output_dir` | str | 否 | 输出目录路径，默认为 `output/{op_name}` |
+
+## Input Modes
+
+### Mode 1: Benchmark 模式（推荐）
+当调用方提供以下参数时，直接读取 benchmark 文件：
+- `benchmark_file`: Benchmark 任务文件的完整路径（如 `/path/to/1_GELU.py`）
+
+**输入文件格式**：`{id}_{op_name}.py`（如 `1_GELU.py`）
+
+### Mode 2: 标准模式
+- 从 `{output_dir}/{op_name}_reference.py` 读取（默认：`output/{op_name}/{op_name}_reference.py`）
+- 需要先执行 `reference_generation` skill
+
 ## Workflow
 
-1. Read input PyTorch code `{op_name}_reference.py`
+### Benchmark 模式 Workflow
+1. **读取 benchmark 文件**：从 `benchmark_file` 参数指定的路径读取
+2. **提取算子名**：从文件名 `{id}_{op_name}.py` 中提取 `op_name`
+3. **读取参考示例**：根据算子类型从 @references 读取对应示例，如果没有对应示例，则从这些示例中随机挑几个参考，并为{op_name}生成新的示例。
+4. **生成 functional 代码**：
+   - 保持原有的 `Model` 类结构
+   - 添加 `module_fn()` 函数，使用 functional API
+   - 添加 `get_inputs()` 和 `get_init_inputs()` 函数（如果原文件没有），Benchmark 任务文件同级目录下如果存在{id}_{op_name}.json文件，选择多行
+5. **保存输出**：写入 `{output_dir}/{op_name}_functional.py`（默认：`output/{op_name}/{op_name}_functional.py`）
+
+### 标准模式 Workflow
+1. Read input PyTorch code `{output_dir}/{op_name}_reference.py` (default: `output/{op_name}/{op_name}_reference.py`)
 2. Read the corresponding example files according to op `{category}` from @references:
    - For pool ops: `average_pooling2d`
    - For cum ops: `cumsum`
@@ -25,7 +56,7 @@ Use this when converting reference PyTorch code to functional form for DSL gener
    - Model Definition: A `Model(nn.Module)` class with an init and a forward method.
    - Configurations: Following the `Model` class, there are some configurations and two functions `get_inputs()` and `get_init_inputs()`. Simply copy the code from the original file. They are for test purposes.
    - Members: The `Model` class may have members that are also `nn.Module`, they are defined either in `torch.nn` or before the `Model` class.
-4. Save to `output/{op_name}/{op_name}_functional.py`
+4. Save to `{output_dir}/{op_name}_functional.py` (default: `output/{op_name}/{op_name}_functional.py`)
 
 **key Points**:
 ### Imports

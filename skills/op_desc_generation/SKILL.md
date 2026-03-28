@@ -11,6 +11,13 @@ Generate operator description JSON files from the template for Ascend operator d
 
 Use this when you need to create an operator description JSON file for a new operator before generating PyTorch reference code, AscendDSL, or AscendC implementations.
 
+## Input Parameters
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `op_name` | str | 是 | 算子名称 |
+| `output_dir` | str | 否 | 输出目录路径，默认为 `output/{op_name}` |
+
 ## Workflow
 
 1. Read the template file @references/op_desc_template.json and example file @references/layer_norm_op_desc.json
@@ -27,4 +34,4 @@ Use this when you need to create an operator description JSON file for a new ope
    - `description`: Clear mathematical definition and behavior
    - `shape_info`: Information related to tensors in the parameters with names, shapes, dtypes.
    - `attributes`: The parameters other than the tensor parameters which are generally kwargs and have default values.
-4. Save the JSON file in current project `output/{op_name}/{op_name}_op_desc.json`
+4. Save the JSON file to `{output_dir}/{op_name}_op_desc.json` (default: `output/{op_name}/{op_name}_op_desc.json`)

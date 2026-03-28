@@ -23,7 +23,7 @@ class Model(nn.Module):
     def __init__(self):
         super(Model, self).__init__()
     
-    def forward(self, x: torch.Tensor, fn=module_fn) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Applies Softmax activation to the input tensor.
 
@@ -33,7 +33,7 @@ class Model(nn.Module):
         Returns:
             torch.Tensor: Output tensor with Softmax applied, same shape as input.
         """
-        return fn(x)
+        return module_fn(x)
 
 
 batch_size = 16
@@ -44,4 +44,4 @@ def get_inputs():
     return [x]
 
 def get_init_inputs():
-    return []  # No special initialization inputs needed
+    return []

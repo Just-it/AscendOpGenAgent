@@ -27,8 +27,8 @@ class Model(nn.Module):
     def __init__(self):
         super(Model, self).__init__()
 
-    def forward(self, predictions, targets, fn=module_fn):
-        return fn(predictions, targets)
+    def forward(self, predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        return module_fn(predictions, targets)
 
 
 batch_size = 128

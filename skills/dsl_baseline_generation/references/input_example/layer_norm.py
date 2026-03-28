@@ -16,7 +16,6 @@ def module_fn(x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, eps: fl
     Returns:
         torch.Tensor: Output tensor with Layer Normalization applied, same shape as input.
     """
-    # Get the normalized shape from the weight tensor
     normalized_shape = tuple(x.shape[-len(weight.shape):])
     return F.layer_norm(
         x, normalized_shape=normalized_shape, weight=weight, bias=bias, eps=eps
@@ -27,28 +26,25 @@ class Model(nn.Module):
     """
     Simple model that performs Layer Normalization.
     """
-    def __init__(self, normalized_shape: tuple):
+    def __init__(self):
         """
         Initializes the LayerNorm layer.
-
-        Args:
-            normalized_shape (tuple): Shape of the input tensor to be normalized.
         """
         super(Model, self).__init__()
-        self.weight = nn.Parameter(torch.ones(normalized_shape))
-        self.bias = nn.Parameter(torch.zeros(normalized_shape))
 
-    def forward(self, x: torch.Tensor, fn=module_fn) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
         """
         Applies Layer Normalization to the input tensor.
 
         Args:
             x (torch.Tensor): Input tensor of shape (*, normalized_shape).
+            weight (torch.Tensor): Weight tensor of shape (normalized_shape).
+            bias (torch.Tensor): Bias tensor of shape (normalized_shape).
 
         Returns:
             torch.Tensor: Output tensor with Layer Normalization applied, same shape as input.
         """
-        return fn(x, self.weight, self.bias)
+        return module_fn(x, weight, bias)
 
 batch_size = 16
 features = 64
@@ -57,7 +53,9 @@ dim2 = 256
 
 def get_inputs():
     x = torch.randn(batch_size, features, dim1, dim2)
-    return [x]
+    weight = torch.ones(features, dim1, dim2)
+    bias = torch.zeros(features, dim1, dim2)
+    return [x, weight, bias]
 
 def get_init_inputs():
-    return [(features, dim1, dim2)]
+    return []

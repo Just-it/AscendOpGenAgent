@@ -1,11 +1,15 @@
 import torch
 import torch.nn as nn
+
+def module_fn(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+    return torch.matmul(A, B)
+
 class Model(nn.Module):
     def __init__(self):
         super(Model, self).__init__()
     
     def forward(self, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
-        return torch.matmul(A, B)
+        return module_fn(A, B)
 
 M = 1024
 K = 1024

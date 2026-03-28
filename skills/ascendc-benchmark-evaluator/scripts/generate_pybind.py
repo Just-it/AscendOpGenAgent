@@ -68,19 +68,19 @@ def generate_pybind_bindings(work_dir: Path, op_cpp: Path) -> None:
     # 处理 op.cpp 文件
     op_cpp_path = Path(op_cpp).resolve()
     cpp_path = target_dir.joinpath("CppExtension/csrc/op.cpp")
-
+    
     if not op_cpp_path.exists():
         raise FileNotFoundError(f"op.cpp 源文件不存在: {op_cpp_path}")
-
+    
     # 如果目标文件存在，先删除
     if cpp_path.exists():
         logging.info(f"删除已存在的 op.cpp: {cpp_path}")
         cpp_path.unlink()
-
+    
     # 拷贝源文件到目标位置
     logging.info(f"拷贝 op.cpp 文件: {op_cpp_path} -> {cpp_path}")
     cpp_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(op_cpp_path, cpp_path)
+    shutil.copy2(op_cpp, cpp_path)
 
     # 执行编译
     try:

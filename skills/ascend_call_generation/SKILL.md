@@ -11,8 +11,15 @@ Generate Ascend operator invocation code and project json configuration file fro
 
 Use this after functional conversion to create operator metadata for DSL generation.
 
+## Input Parameters
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `op_name` | str | 是 | 算子名称 |
+| `output_dir` | str | 否 | 输出目录路径，默认为 `output/{op_name}` |
+
 ## Workflow
-1. read input functional pytorch code `{op_name}_functional.py`
+1. read input functional pytorch code `{output_dir}/{op_name}_functional.py` (default: `output/{op_name}/{op_name}_functional.py`)
 2. read three example output files in `references/{op_name}` dir by op catagory
     - For pool ops: `average_pooling2d`
     - For reduction ops: `sum_reduction_over_a_dimension`
@@ -22,7 +29,7 @@ Use this after functional conversion to create operator metadata for DSL generat
     - project json code for msopgen to create the custom Ascend operate project
     - python bind code for C -> python API interface
     - python code to call the custom Ascend C operate
-4. save all file in `output/{op_name}/` directory.
+4. save all file in `{output_dir}/` directory (default: `output/{op_name}/`).
 5. create Ascend C project(run gen_project.py)
 
 ### Generation Task
@@ -36,7 +43,7 @@ JSON schema defining the custom AscendC operator:
 
 **Critical**: Ensure 1-to-1 correspondence with [module_fn] arguments. Do NOT add attributes that don't appear in [module_fn] signature.
 
-Save json code in `{op_name}_project.json`
+Save json code in `{output_dir}/{op_name}_project.json` (default: `output/{op_name}/{op_name}_project.json`)
 
 #### 2. python_bind code
 C++ pybind11 code connecting AscendC operator to PyTorch:
@@ -50,7 +57,7 @@ C++ pybind11 code connecting AscendC operator to PyTorch:
 - Handle negative dimension parameters (dim) properly
 - Expose function with **exact same signature** as [module_fn]
 
-Save C code in `{op_name}.cpp`
+Save C code in `{output_dir}/{op_name}.cpp` (default: `output/{op_name}/{op_name}.cpp`)
 
 
 #### 3. model code
@@ -62,14 +69,14 @@ Save C code in `{op_name}.cpp`
 
 **Note**: Only implement specific behavior used by original Model. For example, if Model always uses `dim=1`, don't implement arbitrary dim cases.
 
-Save python code in `{op_name}_custom.py`
+Save python code in `{output_dir}/{op_name}_custom.py` (default: `output/{op_name}/{op_name}_custom.py`)
 
 ### create AscendC project
 You should use `gen_project.py` to create the Ascend C project.
 
 Usage:
 ```shell
-python3 .opencode/skills/ascend_call_generation/scripts/gen_project.py <op_name> <json_file_path>
+python3 .opencode/skills/ascend_call_generation/scripts/gen_project.py <op_name> <json_file_path> [--output_dir <目录>]
 ```
-Check if the project generate success in `output` dir.
+Check if the project generate success in `{output_dir}` dir.
 If not, analysis the error and try to use right parameters re-run the script.

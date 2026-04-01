@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 
 """
-Use msopgen to create Asceng C project.
+Use msopgen to create Ascend C project.
 
 Usage:
-    python3 gen_project.py <op_name> <json_file_path>
+    python3 gen_project.py <op_name> <json_file_path> [--output_dir <目录>]
 
-Examplse:
+Examples:
     python3 gen_project.py relu output/relu_project.json
+    python3 gen_project.py relu output/relu_project.json --output_dir /custom/path/relu
+
+Arguments:
+    op_name: Operator name (e.g., 'relu', 'add')
+    json_file_path: Project JSON file path
+    --output_dir: Output directory path (default: output/<op_name>)
 """
 
 import shutil
@@ -113,13 +119,14 @@ def underscore_to_pascalcase(underscore_str):
     return "".join(word.capitalize() for word in parts if word)
 
 
-def prepare_ascend_project(op_name: str, project_json: Path) -> Path:
+def prepare_ascend_project(op_name: str, project_json: Path, output_dir: Path = None) -> Path:
     """
     创建 AscendC 算子工程目录并生成项目骨架。
 
     Args:
         op_name (str): 原始算子名，如 'relu'
         project_json (Path): 创建工程所需的json文件路径，如'output/{op_name}_project.json'
+        output_dir (Path): 输出目录路径，默认为 output/<op_name>
 
     Returns:
         Path: 生成的 AscendC 工程目录路径（如 ./output/ReluCustom）
@@ -128,22 +135,21 @@ def prepare_ascend_project(op_name: str, project_json: Path) -> Path:
         Exception: msopgen 生成失败或文件操作异常
         FileNotFoundError: project_json 指定的文件不存在
     """
-    # 处理 project_json：当作文件路径读取
     if not project_json.exists():
         raise FileNotFoundError(f"Project JSON file not found: {project_json}")
     ascendc_device = get_ascend_device()
     ascendc_device = ascendc_device.lower().replace(" ", "")
 
-    # 标准化路径
-    op_engineer_dir = Path("output").joinpath(op_name).resolve()
+    if output_dir:
+        op_engineer_dir = Path(output_dir).resolve()
+    else:
+        op_engineer_dir = Path("output").joinpath(op_name).resolve()
     op_custom = op_name + "_custom"
     op_capital = underscore_to_pascalcase(op_custom)
     target_dir = op_engineer_dir.joinpath(op_capital)
 
-    # 确保工程目录存在
     op_engineer_dir.mkdir(parents=True, exist_ok=True)
 
-    # 调用 msopgen 生成工程
     try:
         logging.info(f"Begin creating operator project for '{op_name}'")
 
@@ -181,10 +187,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="AscendC operator project generator")
     parser.add_argument("op_name", type=str, help="Operator name (e.g., 'relu', 'add')")
     parser.add_argument("project_json", type=Path, help="project json to create AscendC project")
+    parser.add_argument("--output_dir", type=str, default=None, help="Output directory path (default: output/<op_name>)")
     
     args = parser.parse_args()
     try:
-        project_path = prepare_ascend_project(args.op_name, args.project_json)
+        project_path = prepare_ascend_project(args.op_name, args.project_json, args.output_dir)
         logging.info(f"Create Ascend C project at: {project_path}")
     except Exception as e:
         logging.error(e)

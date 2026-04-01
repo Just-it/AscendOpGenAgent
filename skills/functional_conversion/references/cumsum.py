@@ -19,42 +19,35 @@ def module_fn(x: torch.Tensor) -> torch.Tensor:
 class Model(nn.Module):
     """
     A simple model that performs a cumulative sum (prefix sum) operation along a specified dimension.
-
-    Parameters:
-        dim (int): The dimension along which to perform the scan operation.
     """
 
-    def __init__(self, dim):
+    def __init__(self):
         """
         Initialize the Scan model.
-
-        Args:
-            dim (int): The dimension along which to perform the cumulative sum.
         """
         super(Model, self).__init__()
-        self.dim = dim
 
-    def forward(self, x, fn=module_fn):
+    def forward(self, x, dim, fn=module_fn):
         """
         Forward pass for the Scan model, computing the cumulative sum along the specified dimension.
 
         Args:
             x (torch.Tensor): Input tensor of shape (batch_size, *input_shape), where `*input_shape` 
                               can vary depending on the use case.
+            dim (int): The dimension along which to perform the cumulative sum.
 
         Returns:
             torch.Tensor: Tensor of the same shape as `x` after applying cumulative sum along `dim`.
         """
-        # Transpose so that the reduction axis (self.dim) becomes the first axis
+        # Transpose so that the reduction axis (dim) becomes the first axis
         ndim = x.ndim
         perm = list(range(ndim))
-        perm[0], perm[self.dim] = perm[self.dim], perm[0]
+        perm[0], perm[dim] = perm[dim], perm[0]
         
         xt = x.permute(*perm).contiguous()
         
         # Apply cumsum on the first axis
         res = fn(xt)
-        
         # Transpose back to original layout
         res = res.permute(*perm)
         

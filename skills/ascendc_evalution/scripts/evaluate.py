@@ -5,11 +5,12 @@ AscendC 自定义算子评估工具
 用于评估自定义算子的正确性和性能表现。
 
 命令行用法:
-    python evaluate.py <op_name>
+    python evaluate.py <op_name> [--output_dir <目录>]
 
 示例:
     python evaluate.py Add
-    python evaluate.py MyCustomOperator
+    python evaluate.py Add --output_dir /path/to/output/Add
+    python evaluate.py MyCustomOperator --output_dir /custom/path/MyCustomOperator
 
 API 用法:
     from evaluate import AscendBackend
@@ -37,9 +38,13 @@ API 用法:
     - get_init_inputs(): 返回模型初始化参数的函数
 
 目录结构:
-    output/<op_name>/
-        <op_name>_reference.py  # 参考代码
+    <output_dir>/
+        <op_name>_functional.py  # 参考代码
         <op_name>_custom.py     # 自定义算子代码
+
+参数:
+    op_name: 算子名称
+    --output_dir: 输出目录路径（默认为 output/<op_name>）
 
 环境要求:
     - vendors/customize/op_api/lib/ 库文件必须存在
@@ -355,13 +360,17 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(message)s')
     parser = argparse.ArgumentParser(description="Evaluate AscendC custom operator correctness")
     parser.add_argument("op_name", type=str, help="Operator name")
+    parser.add_argument("--output_dir", type=str, default=None, help="Output directory path (default: output/<op_name>)")
     
     args = parser.parse_args()
     
     try:
-        work_dir = Path("output").joinpath(args.op_name).resolve()
+        if args.output_dir:
+            work_dir = Path(args.output_dir).resolve()
+        else:
+            work_dir = Path("output").joinpath(args.op_name).resolve()
         eval_src = work_dir.joinpath(f"{args.op_name}_custom.py")
-        ref_src = work_dir.joinpath(f"{args.op_name}_reference.py")
+        ref_src = work_dir.joinpath(f"{args.op_name}_functional.py")
         evaluate_operator(eval_src, ref_src, work_dir)
     except Exception as e:
         logging.error(f"Evaluation error: {e}")

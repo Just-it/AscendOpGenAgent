@@ -3,10 +3,13 @@ name: dsl-lowering
 description: Translate the operator DSL into AscendC code through multiple passes.
 subagent:
   enabled: true
-  agent_type: general
+  agent_type: Build
   reason: "DSL lowering involves 4 complex transformation passes (tiling, init, process, nonaligned), each requiring detailed code analysis and generation. Using a subagent allows autonomous multi-step execution with error recovery."
   timeout: 900  # 15 minutes
   max_iterations: 15
+  model: "myprovider/glm-5"
+  console_output: true
+  silent: false 
 ---
 
 
@@ -20,6 +23,13 @@ The input AscendC code may already include modifications from earlier passes. Ap
 
 Use this after project creation to lower DSL code to AscendC code
 
+## Input Parameters
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `op_name` | str | 是 | 算子名称 |
+| `output_dir` | str | 否 | 输出目录路径，默认为 `output/{op_name}` |
+
 ## Workflow
 
 Sub-Agent Strategy
@@ -30,7 +40,7 @@ This skill uses a subagent to handle the complex multi-pass transformation:
 - Manages intermediate file state and error recovery
 - Reports progress after each pass
 
-1. Read the operator DSL file `output/{op_name}/{op_name}_dsl.py` and the directory created by the previous AscendC project generation step
+1. Read the operator DSL file `{output_dir}/{op_name}_dsl.py` (default: `output/{op_name}/{op_name}_dsl.py`) and the directory created by the previous AscendC project generation step
 
 2. Based on the operator DSL file, sequentially execute four transformation passes. After each pass generates AscendC code, invoke the `build.sh` script in the AscendC project to perform compilation. If a compilation error occurs, refer to the repair examples in `references/error_correction/` for guidance. Specifically, the four transformation passes are as follows:
 

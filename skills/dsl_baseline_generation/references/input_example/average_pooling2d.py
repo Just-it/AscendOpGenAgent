@@ -14,33 +14,26 @@ class Model(nn.Module):
     """
     Simple model that performs 2D Average Pooling.
     """
-    def __init__(self, kernel_size: int, stride: int = None, padding: int = 0):
+    def __init__(self):
         """
         Initializes the Average Pooling layer.
-
-        Args:
-            kernel_size (int): Size of the pooling window.
-            stride (int, optional): Stride of the pooling operation. Defaults to None (same as kernel_size).
-            padding (int, optional): Padding applied to the input tensor. Defaults to 0.
         """
         super(Model, self).__init__()
-        self.kernel_size = kernel_size
-        self.stride = stride
-        self.padding = padding
 
-    def forward(self, x: torch.Tensor, fn=module_fn) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, kernel_size: int) -> torch.Tensor:
         """
         Applies 2D Average Pooling to the input tensor.
 
         Args:
             x (torch.Tensor): Input tensor of shape (batch_size, channels, height, width).
+            kernel_size (int): Size of the pooling window.
 
         Returns:
             torch.Tensor: Output tensor with Average Pooling applied.
         """
-        x = x.permute(0, 2, 3, 1).contiguous()   # NCHW → NHWC
-        y = fn(x, self.kernel_size)
-        return y.permute(0, 3, 1, 2).contiguous()  # NHWC → NCHW
+        x = x.permute(0, 2, 3, 1).contiguous()
+        y = module_fn(x, kernel_size)
+        return y.permute(0, 3, 1, 2).contiguous()
 
 batch_size = 16
 channels = 64
@@ -50,7 +43,7 @@ kernel_size = 3
 
 def get_inputs():
     x = torch.rand(batch_size, channels, height, width)
-    return [x]
+    return [x, kernel_size]
 
 def get_init_inputs():
-    return [kernel_size]
+    return []

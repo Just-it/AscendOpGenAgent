@@ -11,16 +11,23 @@ Generate functional reference PyTorch code from operator description JSON files.
 
 Use this when you need to create a golden reference implementation for an operator from its description.
 
+## Input Parameters
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `op_name` | str | 是 | 算子名称 |
+| `output_dir` | str | 否 | 输出目录路径，默认为 `output/{op_name}` |
+
 ## Workflow
 
-1. Read operator description json file `{op_name}_op_desc.json`
+1. Read operator description json file `{output_dir}/{op_name}_op_desc.json` (default: `output/{op_name}/{op_name}_op_desc.json`)
 2. Extract operator name, category, description, shape information, parameters
 3. Read output example code @references/layer_norm.py
 4. Generate PyTorch code:
    - Imports: specify using `torch` and `torch.nn`
    - Model Definition: A `Model(nn.Module)` class with proper `__init__` and `forward` methods.
    - Configurations: hyper-parameters and two helpers `get_inputs()` and `get_init_inputs()` consumed by the model.
-5. Save to `output/{op_name}/{op_name}_reference.py`
+5. Save to `{output_dir}/{op_name}_reference.py` (default: `output/{op_name}/{op_name}_reference.py`)
 
 **key Points**:
 1. The `get_inputs()` function should generate input tensors according to the shape_info provided:

@@ -27,28 +27,25 @@ class Model(nn.Module):
     """
     Simple model that performs Layer Normalization.
     """
-    def __init__(self, normalized_shape: tuple):
+    def __init__(self):
         """
         Initializes the LayerNorm layer.
-
-        Args:
-            normalized_shape (tuple): Shape of the input tensor to be normalized.
         """
         super(Model, self).__init__()
-        self.weight = nn.Parameter(torch.ones(normalized_shape))
-        self.bias = nn.Parameter(torch.zeros(normalized_shape))
 
-    def forward(self, x: torch.Tensor, fn=module_fn) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, fn=module_fn) -> torch.Tensor:
         """
         Applies Layer Normalization to the input tensor.
 
         Args:
             x (torch.Tensor): Input tensor of shape (*, normalized_shape).
+            weight (torch.Tensor): Weight tensor of shape (normalized_shape).
+            bias (torch.Tensor): Bias tensor of shape (normalized_shape).
 
         Returns:
             torch.Tensor: Output tensor with Layer Normalization applied, same shape as input.
         """
-        return fn(x, self.weight, self.bias)
+        return fn(x, weight, bias)
 
 batch_size = 16
 features = 64

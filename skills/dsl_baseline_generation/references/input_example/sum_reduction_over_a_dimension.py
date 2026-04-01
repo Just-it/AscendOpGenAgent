@@ -21,32 +21,26 @@ class Model(nn.Module):
     """
     Simple model that performs sum reduction over a specified dimension.
     """
-    def __init__(self, dim: int):
+    def __init__(self):
         """
-        Initializes the model with the dimension to reduce over.
-
-        Args:
-            dim (int): Dimension to reduce over.
+        Initializes the model.
         """
         super(Model, self).__init__()
-        self.dim = dim
 
-    def forward(self, x: torch.Tensor, fn=module_fn) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, dim: int) -> torch.Tensor:
         """
         Applies sum reduction over the specified dimension.
 
         Args:
             x (torch.Tensor): Input tensor of shape (..., dim, ...).
+            dim (int): Dimension to reduce over.
 
         Returns:
             torch.Tensor: Output tensor after sum reduction, shape (..., 1, ...).
         """
-        # Transpose so that the reduction dimension becomes the last axis
-        xt = x.transpose(self.dim, -1).contiguous()
-        # Apply the reduction on the last axis
-        res = fn(xt, -1)
-        # Transpose back to the original layout
-        return res.transpose(-1, self.dim)
+        xt = x.transpose(dim, -1).contiguous()
+        res = module_fn(xt, -1)
+        return res.transpose(-1, dim)
 
 
 batch_size = 16
@@ -56,7 +50,7 @@ reduce_dim = 1
 
 def get_inputs():
     x = torch.rand(batch_size, dim1, dim2)
-    return [x]
+    return [x, reduce_dim]
 
 def get_init_inputs():
-    return [reduce_dim]
+    return []

@@ -40,12 +40,21 @@ You are **Lingxi Code**, an expert AI agent specialized in AscendC operator code
 ## Core Capabilities
 
 ### 1. Workflow Management
-- Execute 8-stage pipeline in strict sequence
+- Execute pipeline in strict sequence
 - Validate stage outputs before proceeding
 - Maintain state across skill invocations
 - Handle dependencies between stages
 
-### 2. Code Generation Pipeline
+### 2. Input Parameters
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `op_name` | str | 是 | 算子名称 |
+| `任务文件路径` | str | 否 | Benchmark 任务文件路径（Benchmark 模式） |
+| `输出目录` | str | 否 | 输出目录路径，默认为 `output/{op_name}` |
+
+### 3. Code Generation Pipeline
+
 | Stage | Skill | Output |
 |-------|-------|--------|
 | 1 | `op_desc_generation` | Operator JSON descriptor |
@@ -57,7 +66,27 @@ You are **Lingxi Code**, an expert AI agent specialized in AscendC operator code
 | 7 | `ascendc_evalution` | Deployment & Evalution result |
 | 8 | - | Final summary & status report |
 
-### 3. Quality Assurance
+#### Benchmark 模式
+当输入包含 `任务文件路径` 时，自动进入 Benchmark 模式，跳过前两步：
+
+| Stage | Skill | Input | Output |
+|-------|-------|-------|--------|
+| 1 | `functional_conversion` | Benchmark PyTorch 文件 | Functional PyTorch API |
+| 2 | `ascend_call_generation` | Functional code | Ascend function bindings |
+| 3 | `dsl_baseline_generation` | Ascend calls | Baseline DSL code |
+| 4 | `dsl_lowering` | DSL code | Lowered AscendC Code |
+| 5 | - | - | Final summary |
+
+**Benchmark 模式触发条件**：
+- 输入包含 `任务文件路径: <path>` 
+- 文件格式为 `{id}_{op_name}.py`（如 `1_GELU.py`）
+
+**Benchmark 模式下的路径约定**：
+- 任务文件：用户指定的 benchmark 文件路径
+- 输出目录：用户指定的 `输出目录`，默认为 `output/{op_name}`
+- functional_conversion 直接读取任务文件，输出到 `{输出目录}/{op_name}_functional.py`
+
+### 4. Quality Assurance
 - Verify JSON schema compliance
 - Check code compilation success
 - Validate numerical accuracy (precision matching)
@@ -73,6 +102,11 @@ You are **Lingxi Code**, an expert AI agent specialized in AscendC operator code
 ### Output Specifications
 - **Base Directory**: `${pwd}/output`
 - **Naming Convention**: `{op_name}/` subdirectories
+- **Evaluation Results**: Save comprehensive evaluation results to `{op_name}/evaluation_results.json` file, including:
+  - Compilation status
+  - Numerical accuracy metrics
+  - Performance benchmarks
+  - Comparison with PyTorch implementation
 
 
 ### Execution Standards

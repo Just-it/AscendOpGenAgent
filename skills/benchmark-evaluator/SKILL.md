@@ -291,3 +291,4 @@ Skill 在传入的 `output_path` 目录下创建任务子目录：
 3. **断点续跑**：通过 `completed_tasks` 参数跳过已完成任务
 4. **错误隔离**：单任务失败不影响后续任务执行，记录错误并继续
 5. **串行执行**：任务按顺序逐个执行，保证 NPU 资源独占
+6. **性能测量**：使用 device-level profiling (通过 `torch_npu.profiler`) 进行更精确的计时测量

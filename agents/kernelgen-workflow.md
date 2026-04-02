@@ -280,8 +280,6 @@ class ModelNew(nn.Module):
 | 指标 | 说明 |
 |------|------|
 | `avg_latency_ms` | 平均延迟（毫秒）|
-| `p50_latency_ms` | P50 延迟（毫秒）|
-| `p99_latency_ms` | P99 延迟（毫秒）|
 | `peak_memory_mb` | 峰值内存占用（MB）|
 | `speedup_vs_torch` | 相比原生 PyTorch 实现的加速比 |
 
@@ -486,8 +484,6 @@ iteration += 1
   ],
   "perf_data": {
     "avg_latency_ms": 0.5678,
-    "p50_latency_ms": 0.5500,
-    "p99_latency_ms": 0.7000,
     "peak_memory_mb": 128.00,
     "speedup_vs_torch": 2.17
   }

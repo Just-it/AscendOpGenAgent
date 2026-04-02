@@ -370,8 +370,6 @@ python3 <kernel-verifier路径>/scripts/benchmark.py \
   "baseline_speedup": 1.23,
   "perf_data": {
     "avg_latency_ms": 0.5678,
-    "p50_latency_ms": 0.5500,
-    "p99_latency_ms": 0.7000,
     "peak_memory_mb": 128.00,
     "speedup_vs_torch": 2.17
   }

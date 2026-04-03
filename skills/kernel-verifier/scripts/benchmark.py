@@ -208,7 +208,7 @@ def run_profiler_with_config(test_fn: callable, warmup: int, repeats: int, profi
     # 实验性配置
     experimental_config = torch_npu.profiler._ExperimentalConfig(
         aic_metrics=None,
-        profiler_level=torch_npu.profiler.ProfilerLevel.Level0,
+        profiler_level=torch_npu.profiler.ProfilerLevel.Level1,
         l2_cache=False,
         data_simplification=False
     )
@@ -249,6 +249,46 @@ def run_profiler_with_config(test_fn: callable, warmup: int, repeats: int, profi
     return profile_path
 
 
+def measure_single_fallback(
+    model: Any,
+    inputs: List[Any],
+    warmup: int,
+    repeats: int,
+    device: Any
+) -> Tuple[Optional[Dict[str, float]], Optional[float], float]:
+    """使用time.perf_counter()的兜底测试机制"""
+    import torch
+    import torch_npu
+    import time
+    import statistics
+    
+    # 执行warmup
+    with torch.no_grad():
+        for _ in range(warmup):
+            _ = model(*inputs)
+    torch.npu.synchronize()
+    
+    # 正式测试
+    latencies = []
+    for _ in range(repeats):
+        torch.npu.synchronize()
+        start = time.perf_counter()
+        with torch.no_grad():
+            _ = model(*inputs)
+        torch.npu.synchronize()
+        end = time.perf_counter()
+        latencies.append((end - start) * 1000)  # 转换为毫秒
+    
+    # 计算平均时延
+    avg_latency_ms = statistics.mean(latencies)
+    
+    # 获取峰值内存
+    peak_memory = torch.npu.max_memory_allocated() / (1024 * 1024)
+    
+    # 兜底机制不获取算子级别的时延，返回空字典
+    return {}, round(avg_latency_ms, 4), round(peak_memory, 2)
+
+
 def measure_single(
     model: Any,
     inputs: List[Any],
@@ -267,11 +307,20 @@ def measure_single(
     # 准备测试函数
     test_fn = prepare_model_fn(model, inputs, device)
     
-    # 运行profiler
-    profile_path = run_profiler_with_config(test_fn, warmup, repeats, profile_name)
+    try:
+        # 运行profiler
+        profile_path = run_profiler_with_config(test_fn, warmup, repeats, profile_name)
+        
+        # 解析结果
+        operators, latency_ms = parse_operator_latency(profile_path, repeats)
+    except Exception as e:
+        print(f"torch_npu.profiler 获取数据失败: {e}，使用兜底测试机制...")
+        operators, latency_ms = None, None
     
-    # 解析结果
-    operators, latency_ms = parse_operator_latency(profile_path, repeats)
+    # 如果profiler获取不到数据，使用兜底机制
+    if operators is None or latency_ms is None:
+        print(f"警告: profiler 无法获取时延数据，将使用 time.perf_counter() 进行兜底测试...")
+        return measure_single_fallback(model, inputs, warmup, repeats, device)
     
     # 获取峰值内存
     peak_memory = torch.npu.max_memory_allocated() / (1024 * 1024)

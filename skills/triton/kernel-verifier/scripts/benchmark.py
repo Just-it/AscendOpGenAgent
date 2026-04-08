@@ -277,9 +277,9 @@ def measure_single(
         print(f"torch_npu.profiler 获取数据失败: {e}，使用兜底测试机制...")
         operators, latency_ms = None, None
 
-    # 如果profiler获取不到数据，使用兜底机制
-    if operators is None or latency_ms is None:
-        print(f"警告: profiler 无法获取时延数据，将使用 time.perf_counter() 进行兜底测试...")
+    # 如果profiler获取不到数据或时延为0/无效，使用兜底机制
+    if operators is None or latency_ms is None or latency_ms <= 0.0001:
+        print(f"警告: profiler 无法获取有效时延数据（当前:{latency_ms} ms），将使用 time.perf_counter() 进行兜底测试...")
         return measure_single_fallback(model, inputs, warmup, repeats, device)
 
     # 获取峰值内存

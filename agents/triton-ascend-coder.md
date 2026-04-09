@@ -223,21 +223,32 @@ while iteration < max_iterations:
 
 ```
 opt_iteration = 0
-max_opt_iterations = 3
 best_code = ""
 best_speedup = 0.0
 baseline_code = Phase 3 产出的 generated_code.py
+improvement_made = false
 ```
 
 ### 迭代循环
 
 ```
-while opt_iteration < max_opt_iterations:
+while True:
 
     ── 4.1 代码分析 + 优化策略 + 代码重写 ────────────
     调用 latency-optimizer skill
 
+    latency-optimizer 报告无更多优化点:
+      → 终止优化，进入 4.6 终局判定
+
+    根据优化点进行代码优化重写
     产物 → {工作目录}/output/opt_iter_{opt_iteration}/optimized_code.py
+
+    checklist 检查:
+      读取latency-optimizer skill 中的references\checklist.md，获取代码规范 checklist
+      验证 optimized_code.py 是否满足所有代码规范
+      不满足 → 修改代码直至满足规范 → 重新检查
+      满足 → 进入 4.2 双重验证
+    
     复制 → {工作目录}/output/optimized_code.py
 
     ── 4.2 双重验证 ──────────────────────────────────
@@ -266,12 +277,11 @@ while opt_iteration < max_opt_iterations:
 
     ── 4.4 结果判定 ──────────────────────────────────
 
-    speedup_vs_baseline ≥ 1.05:
-      → 优化成功，更新 best_code / best_speedup
-      → break，进入 Phase 5
-
-    latency-optimizer 报告无更多优化点:
-      → 终止，优化失败
+    speedup_vs_baseline ≥ 1.0:
+      → 优化成功（性能不劣化即视为成功）
+      → 更新 best_code / best_speedup
+      → improvement_made = true
+      → opt_iteration++，continue
 
     否则:
       → opt_iteration++，continue
@@ -284,13 +294,20 @@ while opt_iteration < max_opt_iterations:
     opt_iteration++
     continue
 
-达到 max_opt_iterations → 优化失败
+    ── 4.6 终局判定 ──────────────────────────────────
+    无优化点时退出判定：
+
+    improvement_made == true:
+      → 优化成功，break，进入 Phase 5
+
+    improvement_made == false:
+      → 优化失败（做完所有尝试后没有效果），break，进入 Phase 5
 ```
 
-### Phase 4 失败处理
+### Phase 4 终局处理
 
-- Phase 4 失败 → **不输出优化报告**，以 Phase 3 的 `generated_code.py` 和性能数据为最终结果
-- Phase 4 成功 → 以 `optimized_code.py` 为最终结果
+- Phase 4 优化成功（improvement_made == true）→ 以 `optimized_code.py` 为最终结果
+- Phase 4 优化失败（improvement_made == false，做完所有尝试后没有效果）→ 以 Phase 3 的 `generated_code.py` 为最终结果
 - 两种情况都进入 Phase 5
 
 ---
@@ -322,7 +339,7 @@ while opt_iteration < max_opt_iterations:
   "perf_data": {
     "avg_latency_ms": 0.5678,
     "speedup_vs_torch": 2.17,
-    "speedup_vs_baseline": 1.35
+    "speedup_vs_triton_baseline": 1.35
   }
 }
 ```
@@ -399,7 +416,7 @@ ${pwd}/triton_ascend_output/op_{op_name}_{timestamp}_{rid}/
 | Phase 3 | 达到 max_iterations | 输出失败报告，任务结束 |
 | Phase 3 | B 类环境错误 | 立即终止，任务失败 |
 | Phase 3 | C 类重复错误 | 立即终止，任务失败 |
-| Phase 4 | 达到 max_opt_iterations | 以 Phase 3 结果继续 |
+| Phase 4 | 无更多优化点 + 无效果 | 以 Phase 3 结果继续 |
 | Phase 4 | B 类环境错误 | 终止优化，以 Phase 3 结果继续 |
 
 ---
@@ -409,8 +426,9 @@ ${pwd}/triton_ascend_output/op_{op_name}_{timestamp}_{rid}/
 | 约束 | 说明 |
 |------|------|
 | Phase 3 最大迭代 | 5 次，禁止超出 |
-| Phase 4 最大迭代 | 3 次，禁止超出 |
-| Phase 4 成功底线 | 性能超过基线 Triton 实现 5% |
+| Phase 4 迭代策略 | 不做最大迭代次数限制，直到 latency-optimizer 报告无更多优化点则退出 |
+| Phase 4 成功底线 | 性能不劣化（speedup_vs_baseline ≥ 1.0） |
+| Phase 4 退出判定 | 有效果（speedup_vs_baseline ≥ 1.0）则成功；做完所有尝试后无效果则失败 |
 | A 类连续上限 | 同一子类型连续 ≥ 3 次 → 自动终止 |
 | 禁止 PyTorch 退化 | forward() 中禁止 torch.*/F.* 计算操作 |
 | 文件操作范围 | 限制在工作目录内 |

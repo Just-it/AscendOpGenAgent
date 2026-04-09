@@ -78,10 +78,32 @@ def kernel(input_ptr, output_ptr, dim1, dim2, ...):
 
 ---
 
+### 优化点 3：BLOCK_SIZE 调优
+
+**适用条件**：代码中存在可调整的 BLOCK_SIZE 参数，且 BLOCK_SIZE 未经过充分调优
+
+**典型代码特征**：
+```python
+@triton.jit
+def kernel(A, C, M, N,
+            BLOCK_M: tl.constexpr = 128,  # BLOCK_SIZE 可能需要调优
+            BLOCK_N: tl.constexpr = 128):
+```
+
+**判断逻辑**：
+- 如果代码中存在 BLOCK_SIZE 参数（BLOCK_M、BLOCK_N、BLOCK_K 等）且未进行系统性调优 → 涉及
+- 如果 BLOCK_SIZE 已经过充分调优（如通过 benchmark 确定了最优值）→ 不涉及，跳过
+
+**命中条件**：代码中存在 BLOCK_SIZE 参数，且当前值可能不是最优配置
+
+**参考文档**：`references/block_size_tuning.md`
+
+---
+
 ## 优化流程
 
 ```
-1. 按顺序检查优化点
+1. 按顺序检查优化点 1 → 2 → 3
 2. 对于当前优化点，先判断是否命中（代码特征满足 + 适用条件成立）：
    - 未命中 → 跳过，检查下一优化点
    - 命中 → 参考对应文档，应用优化策略
@@ -113,4 +135,5 @@ def kernel(input_ptr, output_ptr, dim1, dim2, ...):
 |----------|----------|
 | 入参静态化优化 | `references/constexpr_parameters.md` |
 | Tiling 优化 | `references/tiling_optimization.md` |
+| BLOCK_SIZE 调优 | `references/block_size_tuning.md` |
 | 代码规范检查 | `references/checklist.md` |

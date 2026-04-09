@@ -51,26 +51,28 @@ def kernel(A, B, C, M, N,
 
 ### 优化点 2：Tiling 优化
 
-**适用条件**：代码中存在可优化的循环分块策略
+**适用条件**：处理多维张量（3D 及以上）的规约类（Reduction）或归一化类（Normalization）算子，且规约轴（Reduction Axis）并非内存布局中的最连续轴（通常为最后一维 $N$）。
 
 **典型代码特征**：
 ```python
-# 大块内存直接访问，无分层分块
-pid = tl.program_id(axis=0)
-m_offsets = pid * BLOCK_M + tl.arange(0, BLOCK_M)
-n_offsets = tl.arange(0, BLOCK_N)
-a = tl.load(A + m_offsets[:, None] * stride_am + n_offsets[None, :] * stride_an)
-
-# 或分块过大/过小，需要调整 tile 大小
-tile_m = BLOCK_M
-tile_n = BLOCK_N
+@triton.jit
+def kernel(input_ptr, output_ptr, dim1, dim2, ...):
+    # 特征 1：向量化偏移 tl.arange 作用在非连续轴（如 dim1/M 轴）
+    m_offsets = tl.arange(0, BLOCK_SIZE_M)
+    # 特征 2：访存偏移计算中，向量化部分乘上了较大的 stride
+    input_offset = m_offsets * stride_m + n_idx * stride_n
+    # 特征 3：循环内部频繁进行还原操作（如 tl.sum）将向量压缩为标量
+    acc = tl.zeros((BLOCK_SIZE_M,), dtype=tl.float32)
+    ...
+    total_sum = tl.sum(acc, axis=0)
 ```
 
 **判断逻辑**：
-- 如果代码中存在大块内存访问、无分层分块、或分块大小明显不合理 → 涉及
-- 如果分块策略已经过合理优化 → 不涉及，跳过
+- 检查 `tl.load` 的偏移量计算：如果 `tl.arange` 产生的向量偏移量作用于 `stride > 1` 的轴，而存在 `stride = 1` 的轴仅被当作标量索引处理 → 涉及
+- 检查循环累加器：如果累加器在还原轴上分块，但访存模式导致了非连续内存读取 → 涉及
+- 如果 `tl.arange` 已经作用于内存最连续的轴（通常是最后一张量的最后一维），且实现了合并访存 → 不涉及，跳过
 
-**命中条件**：代码特征满足上述典型代码特征之一，且适用条件成立
+**命中条件**：代码逻辑旨在对某维度进行还原，但其分块策略导致硬件执行了跨步访存（Strided Access），未能利用硬件向量单元的合并访存特性。
 
 **参考文档**：`references/tiling_optimization.md`
 

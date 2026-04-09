@@ -2,44 +2,59 @@
 
 ## 概述
 
-Tiling（分块）优化是通过将大尺寸数据划分为更小的块（tile），使每个块能够更好地利用 Triton NPU 的局部性原理，提升缓存命中率和计算效率。
+在 NPU 架构中，内存带宽通常是性能瓶颈。
+
+合并访存（Coalesced Access）：当一个向量指令访问连续的内存地址时，硬件可以一次性高效读取数据。
+
+跨步访存（Strided Access）：如果向量化轴在非连续维度，硬件必须发起多次内存请求或进行复杂的地址重组，导致带宽利用率大幅下降。
+
+计算效率：在连续轴上向量化可以利用 SIMD 单元进行纯向量加法，避免了在循环内频繁执行昂贵的跨 Lane 还原（Reduction）指令。
 
 ## 适用条件
 
-代码中存在可优化的循环分块策略，例如：
-- 矩阵乘法中的 BLOCK_M、BLOCK_N、BLOCK_K 分块
-- 归约操作中的分块归约
-- 元素级操作中的数据分块
+处理多维张量（3D 及以上）的规约类（Reduction）或归一化类（Normalization）算子，且还原轴（Reduction Axis）并非内存布局中的最连续轴（通常为最后一维 N）。
 
 ## 优化方法
 
-### 原始代码
+### 优化前（非连续轴向量化）
 
 ```python
-@triton.jit
-def kernel(A, C, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
-    pid = tl.program_id(axis=0)
-    m_offsets = pid * BLOCK_M + tl.arange(0, BLOCK_M)
-    n_offsets = tl.arange(0, BLOCK_N)
-    # ... 直接访问大块内存
+# 假设 M 为还原轴，N 为连续轴（stride_n=1）
+# 错误：在 M 上分块，导致访存不连续
+for m_start in range(0, dim1, BLOCK_SIZE_M):
+    m_offsets = m_start + tl.arange(0, BLOCK_SIZE_M)
+    # 访存：ptr + (m_offsets * stride_m) + n_idx -> 跨步读
+    vals = tl.load(input_ptr + m_offsets * stride_m + n_idx)
+    acc += vals
+result = tl.sum(acc) # 循环内或末尾需要还原向量
 ```
 
-### 优化后代码
+### 优化后（连续轴向量化）
 
 ```python
-@triton.jit
-def kernel(A, C, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
-    pid = tl.program_id(axis=0)
-    # 将大块划分为更小的 tile
-    tile_m = BLOCK_M // 2
-    tile_n = BLOCK_N // 2
-    m_offsets = pid * BLOCK_M + tl.arange(0, tile_m)
-    n_offsets = tl.arange(0, tile_n)
-    # ... 逐 tile 处理，提升缓存效率
+# 正确：在 N 上分块，利用连续性
+offsets_n = n_start + tl.arange(0, BLOCK_SIZE_N)
+acc = tl.zeros((BLOCK_SIZE_N,), dtype=tl.float32)
+
+for m_idx in range(0, dim1):
+    # 访存：ptr + (m_idx * stride_m) + offsets_n -> 连续合并读取
+    vals = tl.load(input_ptr + m_idx * stride_m + offsets_n)
+    acc += vals # 纯向量加法，极快
+# 直接处理 acc 向量后写回
 ```
+
+## 优化策略
+
+1. **重置向量化轴**：将 BLOCK_SIZE 从还原轴转移到物理存储最连续的轴（通常是 dim_last）
+
+2. **向量累加器**：在连续轴上维护一个累加器向量
+
+3. **循环设计**：外层循环遍历还原轴（标量迭代或大步长迭代），内层直接进行向量加法
+
+4. **粗粒度调度**：调整 Grid 配置，使每个 Program 处理更连续、更大块的数据（如整个 Batch），提升数据局部性
 
 ## 关键点
 
-1. **分块大小**：分块大小需要根据硬件特性调整，过小导致并行度不足，过大导致缓存失效
-2. **嵌套分块**：对于大尺寸操作，可采用多层分块策略
-3. **向量化访问**：配合向量化内存访问可以进一步提升性能
+1. **合并访存**：向量化轴必须在内存最连续的维度上
+2. **避免跨步访存**：确保 `tl.load` 的偏移量计算中，向量化部分作用于 `stride = 1` 的轴
+3. **向量累加**：在连续轴上累加，避免在循环内执行昂贵的还原指令

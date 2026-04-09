@@ -76,59 +76,10 @@ tile_n = BLOCK_N
 
 ---
 
-### 优化点 3：标量操作优化
-
-**适用条件**：代码中存在可优化的标量计算或离散访存操作
-
-**典型代码特征**：
-```python
-# 标量参数在 kernel 内参与计算
-@triton.jit
-def kernel(A, C, M, N, scale):  # scale 是标量
-    a = tl.load(A + offset)
-    c = a * scale  # 标量乘法在 kernel 内执行
-
-# 循环内的标量算术运算
-for i in range(loop_count):
-    result = result + scalar_value * i
-```
-
-**判断逻辑**：
-- 如果代码中存在标量参数参与计算、或循环内有可向量化的标量操作 → 涉及
-- 如果标量操作已经过合理优化 → 不涉及，跳过
-
-**命中条件**：代码特征满足上述典型代码特征之一，且适用条件成立
-
-**参考文档**：`references/scalar_op_optimization.md`
-
----
-
-### 优化点 4：BLOCK_SIZE 调优
-
-**适用条件**：代码中存在可调整的 BLOCK_SIZE 参数
-
-**典型代码特征**：
-```python
-@triton.jit
-def kernel(A, C, M, N,
-            BLOCK_M: tl.constexpr = 128,  # BLOCK_SIZE 可能需要调优
-            BLOCK_N: tl.constexpr = 128):
-```
-
-**判断逻辑**：
-- 如果代码中存在 BLOCK_SIZE 参数（BLOCK_M、BLOCK_N、BLOCK_K 等）→ 涉及
-- 如果 BLOCK_SIZE 已经过充分调优 → 不涉及，跳过
-
-**命中条件**：代码特征满足上述典型代码特征之一，且适用条件成立
-
-**参考文档**：`references/block_size_tuning.md`
-
----
-
 ## 优化流程
 
 ```
-1. 按顺序检查优化点 1 → 2 → 3 → 4
+1. 按顺序检查优化点
 2. 对于当前优化点，先判断是否命中（代码特征满足 + 适用条件成立）：
    - 未命中 → 跳过，检查下一优化点
    - 命中 → 参考对应文档，应用优化策略
@@ -160,6 +111,4 @@ def kernel(A, C, M, N,
 |----------|----------|
 | 入参静态化优化 | `references/constexpr_parameters.md` |
 | Tiling 优化 | `references/tiling_optimization.md` |
-| 标量操作优化 | `references/scalar_op_optimization.md` |
-| BLOCK_SIZE 调优 | `references/block_size_tuning.md` |
 | 代码规范检查 | `references/checklist.md` |

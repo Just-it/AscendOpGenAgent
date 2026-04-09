@@ -22,6 +22,21 @@
   - 纯 vector 算子不可以超过 vector 单元数量
   - 既包含矩阵计算及 vector 计算的 mix 算子禁止超过 cube 核数
 
+获取核心数量的方法：
+```python
+from typing import Any, Dict, Tuple
+import torch
+import triton
+
+device = torch.npu.current_device()
+device_properties: Dict[str, Any] = (
+    triton.runtime.driver.active.utils.get_device_properties(device)
+)
+
+num_aicore = device_properties.get("num_aicore", -1)
+num_vectorcore = device_properties.get("num_vectorcore", -1)
+```
+
 ### 6. Task 任务划分规范
 - [ ] task 任务划分禁止使用交织划分，每个 grid 任务处理的数据尽可能连续
 

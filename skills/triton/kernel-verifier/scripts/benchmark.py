@@ -208,7 +208,7 @@ def run_profiler_with_config(test_fn: callable, warmup: int, repeats: int, profi
     # 实验性配置
     experimental_config = torch_npu.profiler._ExperimentalConfig(
         aic_metrics=None,
-        profiler_level=torch_npu.profiler.ProfilerLevel.Level2,
+        profiler_level=torch_npu.profiler.ProfilerLevel.Level1,
         l2_cache=False,
         data_simplification=False
     )

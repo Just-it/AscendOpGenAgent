@@ -71,9 +71,23 @@ Stage: {Phase 0 | Stage 1 | Stage 2 | Finalize}
 Step: {what you're doing now}
 Precision: {N/M PASS | pending}
 Perf: {X.XXx mean | pending}
+Optimization:
+  baseline: {X.XXx mean (Stage 1 first perf result)}
+  current:  {X.XXx mean (latest perf result)}
+  speedup:  {current/baseline}x
+  history:
+  - V1: {X.XXx} — {description}
+  - Opt1: {X.XXx} — {what changed}
+  - Opt2: {X.XXx} — {what changed}
 Log:
 - {timestamp} {event}
 ```
+
+**MANDATORY**: The `Optimization` section must be filled in after EVERY performance test.
+- `baseline` is the FIRST performance measurement (Stage 1, before any optimization)
+- `current` is the LATEST measurement
+- `speedup` = current / baseline (>1.0 means improvement)
+- `history` records each version with its perf and what changed
 
 ## Phase 0: Analyze Source
 
@@ -97,7 +111,7 @@ Log:
 5. Plan UB budget: buffers needed × tile_size × sizeof(type) < 192KB
 6. Write plan to progress file (include KB loading decisions)
 
-## Stage 1: Build & Precision (max 5 iterations)
+## Stage 1: Build & Precision
 
 1. Write all 5 kernel files (see File Structure below)
 2. Run static checker: `python3 skills/ascendc/a5-common-scripts/ascendc_static_check.py {output_dir}/kernel/`
@@ -111,11 +125,16 @@ Log:
    - On build/precision fail, **Edit the existing kernel file** — do NOT rewrite from scratch
    - Focus the fix on the specific error/failing case
    - Only regenerate from scratch if the kernel approach is fundamentally wrong
-5. Run precision test: ALL cases must PASS
+5. **HARD LIMIT — compile fix: max 5 attempts**
+   - If build still fails after 5 attempts: write `Stage: FAIL (compile)` + error summary to PROGRESS.md and **STOP immediately**
+   - Do NOT try a 6th time. Do NOT switch approaches. STOP.
+6. Run precision test: ALL cases must PASS
    - **Output compression**: On all-PASS, only note "PRECISION: N/N PASS".
      On failure, print ONLY the failing cases with expected vs actual values.
-6. If precision fails: analyze which cases fail, fix kernel (via Edit), retry
-7. Update progress file after each attempt
+7. **HARD LIMIT — precision fix: max 3 attempts**
+   - If precision still fails after 3 fix attempts: write `Stage: FAIL (precision, {N}/{M} PASS)` to PROGRESS.md and **STOP immediately**
+   - Do NOT try a 4th time. STOP.
+8. Update progress file after each attempt
 
 ### File Structure (all 5 required)
 ```
@@ -128,26 +147,29 @@ Log:
     pybind11.cpp        — torch extension bridge
 ```
 
-## Stage 2: Optimize (if perf < 0.6x, max 5 iterations)
+## A5 Version Control ({output_dir}/)
+
+After Stage 1 precision PASS, initialize git for rollback safety:
+```bash
+cd {output_dir} && git init 2>/dev/null; git add -A && git commit -m "Stage1: {N}/{M} PASS, mean {X}x" --allow-empty
+```
+- After each optimization iteration that passes precision: `git add -A && git commit -m "Opt{N}: {results}"`
+- If optimization breaks precision: `git checkout HEAD -- .` to rollback to last PASS
+- Before Finalize: record `git log --oneline` in PROGRESS.md
+
+## Stage 2: Optimize (if perf < 0.6x)
 
 1. Run performance benchmark
 2. If mean ratio >= 0.6x: skip optimization, go to Finalize
 3. If mean ratio < 0.6x: identify bottleneck (bandwidth? compute? Python overhead?)
 4. Apply optimization: reduce passes, improve tiling, eliminate overhead
 5. Re-verify precision after each optimization (NEVER break precision for perf)
-6. If stalled (no improvement for 2 iterations): escalate to external expert
-   - Spawn Agent(subagent_type="ascendc-a5-researcher") with kernel source + bottleneck info
-   - If no new ideas → accept current best and move to Finalize
+   - If precision breaks: `git checkout HEAD -- .` to rollback, then try different optimization
+6. **HARD LIMIT — optimization: max 3 iterations**
+   - After 3 iterations: write current best perf to PROGRESS.md and **go to Finalize immediately**
+   - Do NOT try a 4th time. Accept current best result.
+   - If still < 0.6x: report honestly with analysis of why, then Finalize
 7. Update progress file with perf trajectory
-
-## Stage 3: Bounded Exploration (if Stage 2 exhausted and perf < 0.4x)
-
-Only if Stage 2 couldn't reach 0.4x:
-1. Check roofline: compute theoretical bandwidth limit. If kernel is >60% efficient, stop.
-2. Spawn ascendc-a5-researcher with kernel source + msprof data for structural hypotheses
-3. Try max 3 structural changes, each verified for precision + perf
-4. 2 consecutive regressions → stop exploration
-5. Wall-clock limit: 30 min max for exploration
 
 ## Checkpoint Assertions (verify before accepting any result)
 
@@ -163,14 +185,16 @@ Before claiming performance numbers:
 
 On build error:
 1. Read error, match against EC-1..EC-15 patterns
-2. Fix code, retry (max 3 attempts per stage)
-3. If unfixable: write error to progress file, stop
+2. Fix code via Edit, retry
+3. Hard limits enforced by Stage 1 (compile: 5, precision: 3) — see above
+4. If any limit reached: write FAIL + error summary to PROGRESS.md and STOP immediately
 
 ## Phase F: Finalize
 
-1. Ensure all deliverables are in `{output_dir}/`
-2. Write final metrics to progress file
-3. Report success/failure summary to caller
+1. Record optimization history: `cd {output_dir} && git log --oneline 2>/dev/null` → append to PROGRESS.md
+2. Ensure all deliverables are in `{output_dir}/`
+3. Write final metrics to progress file
+4. Report success/failure summary to caller
 
 ## Enforced Quality Gates
 

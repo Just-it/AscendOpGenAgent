@@ -313,7 +313,43 @@
 
 ---
 
-## 8. 最小同步检查表
+## 8. 同步历史
+
+### 初始迁移
+
+- **基线 commit**: `fa9a1555809859a7d1d086fa377ef5fa18df1c43`
+- **日期**: 初始迁移
+- **范围**: 完整迁移 Agent + 5 Skills + References + Scripts
+
+### 同步 #1 (2026-04-14)
+
+- **起始 commit**: `fa9a1555809859a7d1d086fa377ef5fa18df1c43`
+- **截止 commit**: `7a77b6041bfd4f5efc89a0743a2932b8bad38475`
+- **下次同步起点**: `7a77b6041bfd4f5efc89a0743a2932b8bad38475`
+
+已同步的提交（按时间顺序）：
+
+| a5_ops commit | 内容 | 同步到的目标文件 | 适配说明 |
+|---|---|---|---|
+| `c68be0c` | A5 git-based rollback 机制 | `agents/ascend-a5-kernel-developer.md` | `docker exec` → 本地 `cd {output_dir} &&` |
+| `c9e955f` | Reg-based SIMD: UNVERIFIED→CONFIRMED（官方文档） | `a5-shared-references/KB_INDEX.md`、`OPERATIONAL_KNOWLEDGE.md`（OL-54）、`hardware/target/ascend950pr.md`、`patterns/unverified/candidates.md`（P-REG-1） | 直接同步，无需适配 |
+| `17cd4fc` | Reg-based SIMD: CONFIRMED→VERIFIED（A5 编译通过） | `a5-shared-references/OPERATIONAL_KNOWLEDGE.md`、`hardware/target/ascend950pr.md`、`patterns/unverified/candidates.md` | 直接同步，无需适配 |
+| `3127a5e` | ascendc-op-gen: 新增 `--optimize` 模式 | `skills/ascendc/ascendc-a5-op-gen/SKILL.md` | SSH/Docker → 本地构建命令；删除 preflight；references 路径适配 |
+| `3c1a176` | OL-55（identity shortcut）、OL-56（1024 线程崩溃） | `a5-shared-references/OPERATIONAL_KNOWLEDGE.md` | 直接同步，无需适配 |
+| `0e9ef91` | ascendc-op-gen: 新增 `--diag` flag | `skills/ascendc/ascendc-a5-op-gen/SKILL.md` | 直接同步，无需适配 |
+| `1ab9612` | PROGRESS.md 强制 Optimization section | `agents/ascend-a5-kernel-developer.md`、`skills/ascendc/ascendc-a5-op-gen/SKILL.md` | 直接同步，无需适配 |
+
+未同步的提交（不影响 A5 算子生成能力）：
+
+| a5_ops commit | 内容 | 不同步原因 |
+|---|---|---|
+| `7a77b60`..`9558e62` 等 | RESULTS.md 更新（精度/性能数据） | a5_ops 项目级文档 |
+| `972d31c` | KB MCP 架构设计 | 知识维护基础设施，明确不迁移 |
+| 各算子 kernel 代码提交 | Histc/Sort/IndexPut/LayerNorm 等 kernel 实现 | 算子产出物，非生成能力变更 |
+
+---
+
+## 9. 最小同步检查表
 
 每次 `a5_ops` 更新后，至少过一遍下面这张表：
 

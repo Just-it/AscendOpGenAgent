@@ -85,3 +85,44 @@ K val = __ldg<LD_L2CacheType::L2_CACHE_HINT_NORMAL_FV,
 - **Pattern**: nblk=1 (serial) + padded alloc + narrow view to exact size
 - **Evidence**: Split V2 fix, 4 previously failing cases now pass (2026-04-09)
 - **Status**: Verified on 1 op. Generalizable to any compact-output kernel.
+
+## P-REG-1: Reg-based 多步融合 — 中间结果留在寄存器避免 UB 搬运 (待 A5 运行时验证)
+
+**来源**: hiascend.com 官方文档 (CANN 9.0 beta2, Reg矢量计算编程)
+
+**Trigger**: 多步 VEC 计算链（3+ 步），中间结果被写回 UB 后立即读回做下一步计算
+
+**Pattern**:
+```cpp
+// Mem-based (当前): 每步中间结果经过 UB
+Cast(work, xd, CAST_NONE, count);      // UB → VEC → UB
+PipeBarrier<PIPE_V>();
+Mul(work, work, smooth, count);         // UB → VEC → UB
+PipeBarrier<PIPE_V>();
+Abs(work, work, count);                 // UB → VEC → UB
+PipeBarrier<PIPE_V>();
+
+// Reg-based (目标): 中间结果留在寄存器
+__simd_vf__ inline void FusedCastMulAbs(...) {
+    Reg::RegTensor<float> reg, smoothReg, absReg;
+    Reg::LoadAlign(reg, srcAddr, aReg);           // UB → Reg (1次)
+    Reg::LoadAlign(smoothReg, smoothAddr, aReg);  // UB → Reg (1次)
+    Reg::Mul(reg, reg, smoothReg, mask);          // Reg 内计算
+    Reg::Abs(absReg, reg, mask);                  // Reg 内计算
+    Reg::StoreAlign(dstAddr, absReg, aReg, mask); // Reg → UB (1次)
+}
+// 省去 2 次 UB 搬入搬出（~4 cycles/次 × 2 = ~8 cycles 节省/VL）
+```
+
+**适用场景**:
+- DynamicQuant: cast→mul_smooth→abs→reduce (4步，可融合为 2 次 UB 访问)
+- GELU: x→exp→mul→add→div (5步)
+- SwiGLU: exp→add→reciprocal→mul (4步)
+- LayerNorm: sub_mean→square→reduce (3步)
+
+**约束**:
+- 每次只处理 VL 个元素，需要手动循环（Mem-based 可处理完整 LocalTensor）
+- `__simd_vf__` 函数内不能调用 `__aicore__` 函数或 SIMT 函数
+- 不支持 GM → Register 直接加载，必须先到 UB
+
+**Status**: A5 编译验证通过 (2026-04-12, CANN 9.0.0 + bisheng). 待运行时性能验证 — 需要在实际 op 上对比 Mem-based vs Reg-based 性能。

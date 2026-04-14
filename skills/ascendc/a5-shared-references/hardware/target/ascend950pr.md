@@ -194,26 +194,91 @@ OI 1~19   → 内存/计算混合：两边都需要优化
 OI > 19   → 计算受限：优化 VEC 利用率（向量化、unroll）
 ```
 
-### Reg-based vs Mem-based SIMD 实现 (待验证)
+### Reg-based vs Mem-based SIMD 实现 (已确认 — 官方文档)
+
+> Source: hiascend.com CANN 9.0 beta2 — Reg矢量计算编程 (atlas_ascendc_10_10071.html, 2026-04-12 采集)
+
+**核心区别**:
+
+| 维度 | Mem-based (基础 API) | Reg-based (Reg 矢量计算 API) |
+|------|---------------------|------------------------------|
+| 操作数 | LocalTensor（UB 内存） | RegTensor（VF Reg 寄存器） |
+| 数据流 | GM → UB → VEC 计算 → UB → GM | GM → UB → **Register** → VEC 计算 → **Register** → UB → GM |
+| 中间结果 | 暂存在 UB（需要 DataCopy 搬进搬出） | **暂存在寄存器中，无需搬出到 UB** |
+| 每次处理量 | 完整 LocalTensor（用户定 TILE_SIZE） | **VL 长度**（Vector Length，硬件决定） |
+| 灵活性 | 框架管理搬运 | **用户自主控制搬运和计算** |
+| 性能 | UB 访问 ~几 cycles | **寄存器访问 ~1 cycle，且减少 UB 搬运** |
+
+**编程模型**:
 
 ```
-专家建议 (2026-04):
-  社区文档的 SIMD 优化基于 mem-based 实现（操作数在 UB 中）。
-  A5 芯片作为新一代架构，可在此基础上改为 reg-based 实现以获得进一步性能提升。
+调用层次: __global__ __aicore__ 核函数
+           → __aicore__ 函数 (Compute)
+             → asc_vf_call<VF函数>(args...)    // 调用 simd vf 函数
+               → __simd_vf__ 函数 (AddVF)      // 寄存器级操作
+                 → __simd_callee__ 子函数       // 可选嵌套
 
-当前理解:
-  - 社区 SIMD (A2/A3): 全部 mem-based，VEC 指令操作 UB 中的数据
-  - A5 SIMD: 同样支持 mem-based，但可能额外支持 reg-based 模式
-  - Reg-based 优势: 寄存器访问延迟 ~1 cycle vs UB ~几 cycles
-
-待验证:
-  1. A5 的 SIMD 管线是否支持寄存器直接操作模式？
-  2. 如果支持，AscendC API 层面如何启用？
-  3. 哪些 VEC 指令支持 reg-based？
-  4. 性能提升预期多少？
-
-状态: UNVERIFIED — 需要查阅 ISA 规格或实验验证
+关键约束:
+- __simd_vf__ 函数内只能调用 __simd_callee__ 和 constexpr aicore
+- 不能在 __simd_vf__ 内调用 __aicore__ 或 simt 函数
+- 不支持从 GM 直接加载到寄存器，必须经过 UB
 ```
+
+**核心数据类型**:
+
+| 类型 | 说明 | 位宽 |
+|------|------|------|
+| `RegTensor<T>` | 矢量数据寄存器，VEC 计算基本单元 | VL (Vector Length) |
+| `MaskReg` | 掩码寄存器，选择参与计算的元素 | VL/8 |
+| `AddrReg` | 地址寄存器，循环中自增偏移 | — |
+| `UnalignRegForLoad/Store` | 非对齐缓冲寄存器 | — |
+
+**典型代码模式**:
+
+```cpp
+// Reg-based Add: 在 __simd_vf__ 函数中
+template<typename T>
+__simd_vf__ inline void AddVF(__ubuf__ T* dstAddr, __ubuf__ T* src0Addr,
+                               __ubuf__ T* src1Addr, uint32_t count,
+                               uint32_t oneRepeatSize, uint16_t repeatTimes)
+{
+    Reg::RegTensor<T> srcReg0, srcReg1, dstReg;
+    Reg::MaskReg mask;
+    Reg::AddrReg aReg;
+    for (uint16_t i = 0; i < repeatTimes; ++i) {
+        aReg = Reg::CreateAddrReg<T>(i, oneRepeatSize);
+        mask = Reg::UpdateMask<T>(count);  // 每次消耗 VL 元素
+        Reg::LoadAlign(srcReg0, src0Addr, aReg);   // UB → Register
+        Reg::LoadAlign(srcReg1, src1Addr, aReg);   // UB → Register
+        Reg::Add(dstReg, srcReg0, srcReg1, mask);  // Register 内计算
+        Reg::StoreAlign(dstAddr, dstReg, aReg, mask); // Register → UB
+    }
+}
+
+// 在 __aicore__ 函数中调用:
+constexpr uint32_t oneRepeatSize = AscendC::GetVecLen() / sizeof(T);
+uint16_t repeatTimes = CeilDivision(count, oneRepeatSize);
+__ubuf__ T* dstAddr = (__ubuf__ T*)dst.GetPhyAddr();
+asc_vf_call<AddVF<T>>(dstAddr, src0Addr, src1Addr, count, oneRepeatSize, repeatTimes);
+```
+
+**流水线同步**: `Reg::LocalMemBar<src_pipe, dst_pipe>()` — 当写读使用不同寄存器时需要。同寄存器写读自动保序。
+
+**性能优势场景**:
+1. **多步融合计算** — 中间结果留在寄存器，省去 UB 搬运（如 `x*smooth → abs → max` 可以在寄存器内完成）
+2. **非对齐数据访问** — UnalignReg 优化连续非对齐场景
+3. **减少 UB bank 冲突** — 数据在寄存器中不占 UB bank
+
+**对我们系统的影响**:
+- 当前所有 kernel 使用 Mem-based（基础 API + LocalTensor）
+- Reg-based 需要重写计算循环：`GetPhyAddr()` 获取 UB 地址 → `asc_vf_call` → `__simd_vf__` 函数
+- 最大受益场景：多步融合（如 DynamicQuant 的 cast→mul→abs→max 可以在寄存器中流水，省 4 次 UB 搬运）
+
+状态: **VERIFIED** — 官方文档 + A5 编译验证通过 (2026-04-12)
+- CANN 9.0.0 + bisheng 编译器支持全部 Reg API
+- 测试文件: `tests/repro/regbase_minimal.cpp` (AddVF: LoadAlign + Add + StoreAlign)
+- 编译命令: cmake + ascendc_library, SOC=Ascend950PR_9589, Release 模式
+- 下一步: 运行时验证（精度 + 性能对比 mem-based）
 
 ### 线程数 vs 寄存器数 tradeoff
 

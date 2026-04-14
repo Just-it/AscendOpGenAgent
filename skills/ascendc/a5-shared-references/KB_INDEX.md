@@ -49,7 +49,7 @@
 | [patterns/domains/precision.md](patterns/domains/precision.md) | fp16/bf16 precision, accumulation, 寄存器累加, register accumulator, float accumulation, rounding | Reduction, normalization |
 | [patterns/domains/kernel_launch.md](patterns/domains/kernel_launch.md) | entry point, LAUNCH_BOUND, extern C, untyped entry, 507035 | All kernels |
 | [patterns/domains/scatter_add.md](patterns/domains/scatter_add.md) | atomicAdd, scatter, EmbeddingBackward, histogram, sorted-edge, 排序, dedup | Scatter ops |
-| [patterns/unverified/candidates.md](patterns/unverified/candidates.md) | candidate, unverified, pending validation, TQueBind, Counter模式, reg-based | Optimization ideas |
+| [patterns/unverified/candidates.md](patterns/unverified/candidates.md) | candidate, unverified, pending validation, TQueBind, Counter模式, **P-REG-1 reg-based fusion**, RegTensor, __simd_vf__ | Optimization ideas |
 
 ## SIMT Reference
 
@@ -62,7 +62,7 @@
 
 | File | Keywords/Aliases | When |
 |------|-----------------|------|
-| [hardware/target/ascend950pr.md](hardware/target/ascend950pr.md) | A5 specs, UB 256KB, 56 AIV cores, HBM bandwidth, register file 128KB, dcache, L2 64MB, reg-based, mem-based, warp scheduler | Hardware constraints |
+| [hardware/target/ascend950pr.md](hardware/target/ascend950pr.md) | A5 specs, UB 256KB, 56 AIV cores, HBM bandwidth, register file 128KB, dcache, L2 64MB, **reg-based SIMD confirmed**, RegTensor, __simd_vf__, asc_vf_call, LoadAlign/StoreAlign, mem-based, warp scheduler | Hardware constraints |
 | [hardware/INDEX.md](hardware/INDEX.md) | GPU→NPU translation, thread waste, atomicAdd latency, shared memory | Porting from GPU |
 
 ## Benchmark & Profiling

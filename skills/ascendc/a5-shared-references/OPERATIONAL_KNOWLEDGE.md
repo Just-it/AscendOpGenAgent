@@ -512,6 +512,28 @@
 - **Lesson**: A multi-pass kernel reads each element from HBM N times (N=number of passes). A fused CANN kernel reads once. The performance ceiling of an N-pass kernel is ~1/N of fused, regardless of VEC optimization. For per-row reductions that need a global statistic before element-wise processing (e.g., quantization needs max before scaling), 2-pass is mandatory unless rows fit in single UB tile. When <0.5x vs CANN with a multi-pass kernel, check if the algorithm requires multi-pass before investing in VEC tuning — the bottleneck is HBM bandwidth, not compute.
 - **Evidence**: DynamicQuant 2-pass (find max, then quantize) → 0.25x of CANN's fused npu_dynamic_quant
 
+## OL-54: Reg-based SIMD — 寄存器级矢量计算 API (官方确认)
+- **Category**: optimization_technique
+- **Loaded by**: Generator, Optimizer, Researcher
+- **Trigger**: 多步融合计算场景（如 cast→mul→abs→reduce），中间结果频繁 UB 搬运成为瓶颈
+- **Lesson**: CANN 9.0 提供 Reg 矢量计算 API（`AscendC::Reg::` namespace），操作数为 `RegTensor`（寄存器）而非 `LocalTensor`（UB 内存）。中间结果留在寄存器中，省去 UB 搬出搬入开销。编程模型：`__simd_vf__` 函数 + `asc_vf_call` 调用 + `LoadAlign/StoreAlign` 搬运 + `Reg::Add` 等计算。每次处理 VL（Vector Length）个元素，需手动循环。与 Mem-based 的关键区别：Mem-based 可一次处理完整 LocalTensor，Reg-based 需按 VL 切分循环。适用场景：多步融合（减少 UB 搬运次数）、非对齐访问（UnalignReg 优化）、减少 UB bank 冲突。
+- **Source**: hiascend.com CANN 9.0 beta2 — Reg矢量计算编程 (2026-04-12 采集)
+- **Status**: **VERIFIED** — 官方文档 + A5 编译通过 (CANN 9.0.0 + bisheng, 2026-04-12). 待运行时精度+性能验证。
+
+## OL-55: Permute — identity shortcut 是最大优化杠杆
+- **Category**: optimization_technique
+- **Loaded by**: Generator, Optimizer
+- **Trigger**: torch.permute / transpose 类算子
+- **Lesson**: 许多 benchmark 包含 identity permutation (perm=[0,1,...,ndim-1])。reference 的 torch.permute(x,identity).contiguous() 实际是 no-op（返回原 tensor）。如果 kernel 对 identity case 做了 clone/copy，性能会比 reference 慢 100x+。修复：pybind 层检测 identity perm 直接 return input。Permute 149 个 case 中 17 个是 identity，修复后整体 median 从 0.04x → 0.63x。推广：任何 data-movement op 都应先检查"是否实际需要移动数据"。
+- **Evidence**: Permute V1→V2, median 0.04x → 0.63x
+
+## OL-56: SIMT 1024 threads 在 Ascend950PR 上的 507035 崩溃
+- **Category**: platform_constraint
+- **Loaded by**: Generator
+- **Trigger**: SIMT kernel 尝试增加线程数到 1024
+- **Lesson**: 将 LAUNCH_BOUND 从 512 提升到 1024 导致 507035 vector core exception。不是所有 kernel 都能用 1024 线程——kernel 复杂度（如 int64 除法循环）可能超出 register file 容量。安全做法：计算密集型 SIMT kernel 保持 512 线程。
+- **Evidence**: Permute kernel int64 division loop + 1024 threads → 507035 crash
+
 ## OL-52: 归约操作选择低延迟指令 — WholeReduceMax vs 二分累加
 - **Category**: algorithm_selection
 - **Loaded by**: Generator

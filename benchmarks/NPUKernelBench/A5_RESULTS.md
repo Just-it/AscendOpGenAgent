@@ -9,7 +9,7 @@
 | # | Problem | Type | Mode | Precision | Best | Worst | Mean | ≥0.6x | ≥1.0x | Status |
 |:---:|---------|:----:|:----:|:---------:|:----:|:-----:|:----:|:-----:|:-----:|:------:|
 | 1 | GELU | Elem | SIMD | **PASS** 50/50 | 0.95x | 0.36x | **0.56x** ⚠️ | 9/50 | 0/50 | Verified |
-| 2 | SwiGLU | Elem+Chunk | — | — | — | — | — | — | — | Pending |
+| 2 | SwiGLU | Elem+Chunk | SIMD | **PASS** 50/50 | 1.56x | 0.44x | **0.68x** ✅ | 26/50 | 2/50 | Verified |
 | 3 | Add | Elem+Bcast | — | — | — | — | — | — | — | Pending |
 | 4 | Abs | Elem | — | — | — | — | — | — | — | Pending |
 | 5 | Cumsum | Scan | — | — | — | — | — | — | — | Pending |

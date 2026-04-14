@@ -94,6 +94,8 @@ python3 utils/perf_ratio.py {OP_DIR} --update-results
   - 精度全 PASS 但 mean < 0.6x → `Verified ⚠️`
   - 精度有 FAIL → `Precision FAIL`
 
+> **特殊标注规则**：若算子精度未通过，需在 **Precision** 列和 **Status** 列均添加醒目标注 `❌`，例如 `❌ **FAIL** 32/46` 和 `❌ Precision FAIL`，以便一眼识别问题算子。
+
 ### Step 6: 输出结果
 
 将汇总展示给用户：

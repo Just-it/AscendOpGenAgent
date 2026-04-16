@@ -53,6 +53,77 @@ argument-hint: >
 2. `Tile 层级设计`
    在第一步基础上继续生成 `{output_dir}/design/tile_level/`。直接以 block-level 设计为骨架，在 tile-level 中补全各处 `TODO(tile-level)`，完成可执行的 TileLang 设计与实现。
    参考文档：`@references/TileLangAscendProgrammingGuide.md`
-3. `TileLang 验证与迭代`
+3. `实现方式校验（验证前强制检查）`
+   在运行正确性验证之前，必须先校验 `model_new_tilelang.py`，确保使用自定义 TileLang kernel 实现，而非 torch/torch_npu 替代。
+   **校验命令**：`python utils/implementation_check.py {output_dir}/model_new_tilelang.py --type tilelang`
+   - 若返回 PASS：继续执行 TileLang 验证
+   - 若返回 FAIL：**立即停止，禁止运行验证脚本**，返回本 skill 重新设计 TileLang kernel
+   详见下方「实现方式校验」章节。
+4. `TileLang 验证与迭代`
    调用 `@references/evaluate_tilelang.sh {output_dir}` 验证 TileLang；如果结果不正确，参考 `@references/TileLangDebug.md` 持续迭代修改，直到通过验证。
    参考文档：`@references/TileLangDebug.md`
+
+## 实现方式校验（验证前强制检查）
+
+**⚠️ 重要：此校验必须在运行正确性验证之前执行！**
+
+在 `model_new_tilelang.py` 生成后、运行验证脚本前，必须执行以下校验，确保使用自定义 TileLang kernel 实现，而非 torch/torch_npu 替代：
+
+### 禁止的实现方式（严格禁止）
+
+| 类别 | 禁止模式 | 示例 | 说明 |
+|------|----------|------|------|
+| PyTorch 函数调用 | `torch.*` | `torch.add`, `torch.mul`, `torch.sum`, `torch.mean`, `torch.matmul` 等 | 禁止用 PyTorch 计算 |
+| PyTorch 神经网络函数 | `torch.nn.functional.*` | `F.relu`, `F.softmax`, `F.linear` 等 | 禁止用 PyTorch 计算 |
+| **PyTorch NPU 接口** | **`torch_npu.*`** | **`torch_npu.npu_xxx`**, `torch_npu.npu_add` 等 | **禁止用 NPU 原生 API 替代自定义 kernel** |
+| Tensor 计算方法 | `tensor.计算方法()` | `tensor.sum()`, `tensor.mean()`, `tensor.matmul()` 等 | 禁止用 PyTorch 计算 |
+| 其他计算函数 | `torch.where`, `torch.clamp`, `torch.maximum`, `torch.minimum` 等 | 禁止用 PyTorch 计算 |
+
+### 允许的操作（仅限以下操作）
+
+| 类别 | 允许模式 | 示例 | 说明 |
+|------|----------|------|------|
+| 张量创建 | `torch.empty`, `torch.zeros`, `torch.ones`, `torch.randn`, `torch.tensor` | 仅用于创建输入/输出张量 | 数据准备 |
+| 张量变换 | `.to()`, `.view()`, `.reshape()`, `.permute()`, `.contiguous()` | 仅用于调整张量布局 | 数据格式转换 |
+| 类型/设备查询 | `.dtype`, `.device`, `.shape` | 用于获取张量元信息 | 信息查询 |
+| **自定义 TileLang kernel** | **`tl_kernel(...)`**, **`kernel(...)`** | 调用 TileLang 实现的自定义算子 | **唯一允许的计算方式** |
+| Python 标准库 | `import`, 控制流等 | 非 PyTorch 计算操作 | 辅助代码 |
+
+### 核心要求
+
+**`model_new_tilelang.py` 中的核心计算必须调用自定义 TileLang kernel，禁止以下替代方案：**
+
+1. **禁止直接调用 `torch_npu.npu_xxx` 接口** - 即使是 NPU 原生接口也不允许，必须使用自定义 TileLang kernel
+2. **禁止用 PyTorch 运算组合实现** - 如 `torch.add`, `torch.mul` 等
+3. **禁止用 Python 循环 + PyTorch 标量运算实现** - 必须将计算下放到 TileLang kernel
+
+### 校验方法
+
+```bash
+# 步骤1: 检查是否包含禁止的 torch.* 计算操作
+grep -n "torch\.[a-zA-Z_]*\s*(" model_new_tilelang.py | grep -vE "torch\.(empty|zeros|ones|randn|arange|tensor|as_tensor|from_numpy|int32|int64|float16|float32|bfloat16|bool|nn\.Module|Tensor)\s*("
+
+# 步骤2: 检查是否包含 torch_npu.* 接口（严格禁止）
+grep -n "torch_npu\.[a-zA-Z_]*\s*(" model_new_tilelang.py
+
+# 步骤3: 检查是否包含 tensor.计算方法() 调用
+grep -n "\.[a-z_]*\s*(" model_new_tilelang.py | grep -E "\.(sum|mean|matmul|add|mul|div|sub|max|min|clamp|where|softmax|relu|linear)\s*(" | grep -v "def\|#"
+
+# 步骤4: 检查是否调用了自定义 TileLang kernel（必须存在）
+grep -n "kernel\s*(" model_new_tilelang.py | grep -v "def\|#"
+```
+
+### 校验命令
+
+```bash
+python utils/implementation_check.py {output_dir}/model_new_tilelang.py --type tilelang
+```
+
+### 处理规则
+
+- **若发现使用 torch/torch_npu 实现替代**：
+  1. **立即停止**，标记 Phase 3 失败，**禁止运行验证脚本**
+  2. 向 tilelang-designer 提供具体违规代码行号和内容
+  3. **要求重新设计 TileLang kernel**，将计算逻辑完整下放到 TileLang，而非在 Python 层用 torch/torch_npu 实现
+  4. 重新进行实现方式校验，直至通过
+  5. 校验通过后才允许运行正确性验证

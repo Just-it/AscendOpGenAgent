@@ -589,6 +589,27 @@ Phase 4 失败时（Phase 3 成功，优化未成功）：
 }
 ```
 
+### 5.7 会话导出（session.jsonl + session.md）
+
+Phase 5 **最末尾**（`summary.json`、`report.md` 写完之后）执行，将当前 Claude Code 会话归档到工作目录，便于复盘。放在最末尾是为了最大化 jsonl 完整性——仍会缺失本步骤之后的极少量消息，可接受。
+
+并行批量执行（`run_benchmark_triton.sh --npu-list`）下，多个子进程共用同一个 `/root/.claude/projects/<hash>/` 目录，**必须用工作目录路径精确过滤**，禁止用时间排序（`ls -t | head -1` 会错拿到其它并发子进程的 jsonl）。
+
+```bash
+# 用工作目录绝对路径作为唯一标记定位自己的 session jsonl
+MY_JSONL=$(grep -l "{工作目录}" /root/.claude/projects/*/*.jsonl 2>/dev/null | head -1)
+if [ -n "$MY_JSONL" ]; then
+  cp "$MY_JSONL" {工作目录}/session.jsonl
+  python3 /mnt/w00934874/agent/code/430/AscendOpGenAgent/utils/render_session.py \
+    {工作目录}/session.jsonl {工作目录}/session.md 2>&1 || \
+    echo "WARN: session render failed (non-fatal)"
+else
+  echo "WARN: session jsonl not located (non-fatal)"
+fi
+```
+
+⚠️ 渲染失败 / 定位失败均不阻塞任务，仅告警。
+
 ---
 
 ## 工作目录结构
@@ -629,8 +650,10 @@ ${pwd}/triton_ascend_output/op_{op_name}_{timestamp}_{rid}/
 │   ├── final_verify_summary.json         # Phase 5 全量精度验证摘要
 │   └── final_perf_result.json            # Phase 5 全量性能测试结果
 ├── {op_name}_generated.py                # Phase 5: 最终代码
-├── summary.json                          # 执行摘要（基于全量评测）
-└── report.md                             # 最终报告（含全量通过率与加速比）
+├── summary.json                          # Phase 5.6: 执行摘要（基于全量评测）
+├── report.md                             # Phase 5.5: 最终报告（含全量通过率与加速比）
+├── session.jsonl                         # Phase 5.7: 当前 Claude Code 会话原始记录
+└── session.md                            # Phase 5.7: 会话 Markdown 渲染（渲染失败时可能缺失）
 ```
 
 ---

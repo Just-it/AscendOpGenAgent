@@ -43,6 +43,7 @@ class PerformanceResult:
     avg_latency_ms: float
     peak_memory_mb: float
     operators: Dict[str, float]
+    total_latency_ms: float = 0.0
 
 
 @dataclass
@@ -471,29 +472,30 @@ def run_single_benchmark(
 
 
 def compute_overall_average(results: List[SingleShapeResult]) -> Tuple[PerformanceResult, PerformanceResult, float]:
-    """计算多组结果的总体平均值。
+    """基于所有成功 case 计算汇总指标。
+
+    关键口径：
+    - total_latency_ms = sum(per_shape_latency_ms)  —— 驱动 Phase 4 判定
+    - avg_latency_ms = mean(per_shape_latency_ms)   —— 向后兼容
+    - speedup_vs_torch = framework.total / implementation.total  —— 求和比（sum ratio）
 
     Args:
-        results: SingleShapeResult 列表
+        results: SingleShapeResult 列表（仅包含成功 case）
     Returns:
-        (avg_framework, avg_implementation, avg_speedup)
+        (avg_framework, avg_implementation, overall_speedup)
     """
     import statistics
-    
+
     if not results:
         raise RuntimeError("没有有效的测试结果")
-    
-    if len(results) == 1:
-        return results[0].framework, results[0].implementation, results[0].speedup_vs_torch
-    
-    # 计算平均值
+
+    # 提取 per-shape 延时
     fw_latencies = [r.framework.avg_latency_ms for r in results]
     impl_latencies = [r.implementation.avg_latency_ms for r in results]
     fw_memories = [r.framework.peak_memory_mb for r in results]
     impl_memories = [r.implementation.peak_memory_mb for r in results]
-    speedups = [r.speedup_vs_torch for r in results]
-    
-    # 合并算子时间
+
+    # 合并算子时间（跨 case 累加后取平均）
     fw_ops: Dict[str, float] = {}
     impl_ops: Dict[str, float] = {}
     for r in results:
@@ -501,22 +503,27 @@ def compute_overall_average(results: List[SingleShapeResult]) -> Tuple[Performan
             fw_ops[op] = fw_ops.get(op, 0) + t
         for op, t in r.implementation.operators.items():
             impl_ops[op] = impl_ops.get(op, 0) + t
-    
+
     n = len(results)
-    
-    return (
-        PerformanceResult(
-            avg_latency_ms=round(statistics.mean(fw_latencies), 4),
-            peak_memory_mb=round(statistics.mean(fw_memories), 2),
-            operators={k: round(v / n, 4) for k, v in fw_ops.items()}
-        ),
-        PerformanceResult(
-            avg_latency_ms=round(statistics.mean(impl_latencies), 4),
-            peak_memory_mb=round(statistics.mean(impl_memories), 2),
-            operators={k: round(v / n, 4) for k, v in impl_ops.items()}
-        ),
-        round(statistics.mean(speedups), 4)
+    fw_total = sum(fw_latencies)
+    impl_total = sum(impl_latencies)
+
+    # 求和比（sum ratio）——驱动判定的核心口径
+    overall_speedup = (fw_total / impl_total) if impl_total > 0 else 0.0
+
+    fw_result = PerformanceResult(
+        avg_latency_ms=round(statistics.mean(fw_latencies), 4),
+        peak_memory_mb=round(statistics.mean(fw_memories), 2),
+        operators={k: round(v / n, 4) for k, v in fw_ops.items()},
+        total_latency_ms=round(fw_total, 4),
     )
+    impl_result = PerformanceResult(
+        avg_latency_ms=round(statistics.mean(impl_latencies), 4),
+        peak_memory_mb=round(statistics.mean(impl_memories), 2),
+        operators={k: round(v / n, 4) for k, v in impl_ops.items()},
+        total_latency_ms=round(impl_total, 4),
+    )
+    return fw_result, impl_result, round(overall_speedup, 4)
 
 
 def _collect_case_meta(inputs):
@@ -599,13 +606,8 @@ def benchmark_implementations(config: BenchmarkConfig) -> BenchmarkResult:
             f"所有 {total_cases} 组用例全部测试失败，无有效性能数据"
         )
 
-    # 计算总体平均值（仅基于成功的 case）
-    if successful_cases == 1:
-        overall_fw = per_shape_results[0].framework
-        overall_impl = per_shape_results[0].implementation
-        overall_speedup = per_shape_results[0].speedup_vs_torch
-    else:
-        overall_fw, overall_impl, overall_speedup = compute_overall_average(per_shape_results)
+    # 计算总体汇总指标（统一走 compute_overall_average，保证 total_latency_ms 正确填充）
+    overall_fw, overall_impl, overall_speedup = compute_overall_average(per_shape_results)
 
     return BenchmarkResult(
         op_name=config.op_name,
@@ -638,11 +640,13 @@ def result_to_dict(result: BenchmarkResult) -> Dict[str, Any]:
         "compile_pass_rate": round(compile_pass_rate, 4),
         "framework": {
             "avg_latency_ms": result.framework.avg_latency_ms,
+            "total_latency_ms": result.framework.total_latency_ms,
             "peak_memory_mb": result.framework.peak_memory_mb,
             "operators": {name: round(avg_us, 4) for name, avg_us in result.framework.operators.items()}
         },
         "implementation": {
             "avg_latency_ms": result.implementation.avg_latency_ms,
+            "total_latency_ms": result.implementation.total_latency_ms,
             "peak_memory_mb": result.implementation.peak_memory_mb,
             "operators": {name: round(avg_us, 4) for name, avg_us in result.implementation.operators.items()}
         },

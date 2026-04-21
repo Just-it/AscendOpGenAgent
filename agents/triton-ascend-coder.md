@@ -358,7 +358,15 @@ while opt_iteration < max_opt_iterations:
     第二次: benchmark.py --triton_impl_name triton_optimized [--skip_framework ...]
       → optimized_perf_result.json
 
-    计算 speedup_vs_baseline = baseline_latency / optimized_latency
+    **判定口径（求和比 / sum ratio）**：
+    从 perf_result.json 读取 `implementation.total_latency_ms`，即所有 shape
+    延时之和（单 shape 场景等同于单值）：
+
+    ```
+    baseline_total  = baseline_data["implementation"]["total_latency_ms"]
+    optimized_total = optimized_data["implementation"]["total_latency_ms"]
+    speedup_vs_baseline = baseline_total / optimized_total
+    ```
 
     ── 4.4 结果判定 ──────────────────────────────────
 
@@ -366,11 +374,10 @@ while opt_iteration < max_opt_iterations:
       → 优化成功，更新 best_code / best_speedup
       → break，进入 Phase 5
 
-    latency-optimizer 报告无更多优化点:
-      → 终止，优化失败
-
-    否则:
-      → opt_iteration++，continue
+    speedup_vs_baseline < 1.05:
+      → 回退到 baseline（Phase 3 产出的 generated_code.py）
+      → 若 latency-optimizer 报告无更多优化点：终止，优化失败
+      → 否则：opt_iteration++，continue
 
     ── 4.5 分析决策 (验证失败时) ─────────────────────
     A 类 (优化引入逻辑错误) → 回退，调整策略，continue
@@ -487,6 +494,7 @@ python benchmark.py \
   "skill_path": ".claude/skills/kernel-verifier",
   "perf_data": {
     "avg_latency_ms": 0.5678,
+    "total_latency_ms": 25.2,
     "speedup_vs_torch": 2.1700,
     "speedup_vs_baseline": 1.35,
     "total_cases": 52,
@@ -504,12 +512,16 @@ python benchmark.py \
 ```
 
 **字段说明**：
+- `avg_latency_ms`：所有成功 case 延迟的**算术平均**（向后兼容）
+- `total_latency_ms`：所有成功 case 延迟的**求和**（驱动 Phase 4 判定的核心指标）
+- `speedup_vs_torch`：**求和比口径** = `framework.total_latency_ms / implementation.total_latency_ms`
+- `speedup_vs_baseline`：**求和比口径** = `baseline.total_latency_ms / optimized.total_latency_ms`，≥ 1.05 才采纳优化代码
 - `total_cases`：全量 case 数（恢复 `.json.bak` 后的数量）
 - `successful_cases` / `failed_cases`：全量评测中实际通过/失败的 case 数
 - `compile_pass_rate`：benchmark 阶段成功跑通的 case 占比（编译+运行通过率）
 - `verify_pass_rate`：verify.py 精度验证的通过率
 - `iteration_cases`：Phase 3/4 迭代时使用的精简集大小（若未触发 Phase 1.5，则等于 `total_cases`）
-- `per_shape_results`：仅包含**全量评测中成功 case** 的明细
+- `per_shape_results`：仅包含**全量评测中成功 case** 的明细，每个 shape 的 `speedup_vs_torch` 仍按单 shape 单独计算
 - 详细失败 case 信息保存在 `output/final_verify_summary.json` 和 `output/final_perf_result.json` 中（不放进 summary.json，避免膨胀）
 - **失败 case 不影响 `success` 标记**，只通过通过率体现
 
@@ -649,7 +661,7 @@ ${pwd}/triton_ascend_output/op_{op_name}_{timestamp}_{rid}/
 | Phase 3 最大迭代 | 5 次，禁止超出 |
 | Phase 3/4 数据集 | 使用精简集 `{xxx}.json`（即原 `.json` 被 Phase 1.5 替换后的内容） |
 | Phase 4 最大迭代 | 3 次，禁止超出 |
-| Phase 4 成功底线 | 性能超过基线 Triton 实现 5% |
+| Phase 4 成功底线 | 所有 shape 总延时之和的加速比 ≥ 1.05（求和比口径） |
 | Phase 5 数据集 | 必须先恢复 `.json.bak` 为全量集；终评不重试任何失败 case |
 | Phase 5 失败容忍 | 全量评测部分 case 失败不影响 success 标记，仅记录通过率 |
 | A 类连续上限 | 同一子类型连续 ≥ 3 次 → 自动终止 |

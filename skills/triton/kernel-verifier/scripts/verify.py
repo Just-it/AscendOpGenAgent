@@ -23,7 +23,11 @@ def get_limit(data_type):
         return 0.03
     elif data_type == torch.int8:
         return 0.01
+    elif data_type in (torch.int16, torch.int32, torch.int64, torch.uint8):
+        # 整型要求精确相等
+        return 0.0
     else:
+        # float32/float64/complex64/complex128 等
         return 0.02
 
 
@@ -112,8 +116,19 @@ def compare(fw_out, impl_out, limit, data_type):
     if impl_finite.dtype != fw_finite.dtype:
         impl_finite = impl_finite.to(fw_finite.dtype)
 
-    abs_diff = torch.abs(fw_finite.float() - impl_finite.float())
-    abs_ref = torch.abs(fw_finite.float())
+    # complex 类型：分别比较 real/imag 部分
+    if fw_finite.is_complex():
+        fw_real = fw_finite.real.float()
+        fw_imag = fw_finite.imag.float()
+        impl_real = impl_finite.real.float()
+        impl_imag = impl_finite.imag.float()
+        abs_diff = torch.sqrt(
+            (fw_real - impl_real) ** 2 + (fw_imag - impl_imag) ** 2
+        )
+        abs_ref = torch.sqrt(fw_real ** 2 + fw_imag ** 2)
+    else:
+        abs_diff = torch.abs(fw_finite.float() - impl_finite.float())
+        abs_ref = torch.abs(fw_finite.float())
     eps = 1e-8
     relative_error = torch.where(abs_ref > eps, abs_diff / abs_ref, abs_diff)
 
@@ -212,11 +227,32 @@ def run_single_case(
                 raise AssertionError(f"[用例 {case_idx}/{total_cases}] {str(e)}") from e
 
 
-def verify_implementations(op_name, verify_dir, triton_impl_name="triton_ascend_impl"):
-    """验证框架实现和生成实现的结果一致性，支持多组输入验证。"""
+def _collect_case_meta(inputs):
+    """收集当前 case 的元信息（shape + dtype），供失败时汇报使用。"""
+    import torch
+    shapes = []
+    dtypes = []
+    for x in inputs:
+        if isinstance(x, torch.Tensor):
+            shapes.append(list(x.shape))
+            dtypes.append(str(x.dtype).replace("torch.", ""))
+    return shapes, dtypes
+
+
+def verify_implementations(op_name, verify_dir, triton_impl_name="triton_ascend_impl",
+                           continue_on_error=False, summary_output=None):
+    """验证框架实现和生成实现的结果一致性，支持多组输入验证。
+
+    Args:
+        continue_on_error: True 时，单个 case 失败不中断循环，继续跑其余 case。
+        summary_output: 若指定路径，则将通过/失败明细写入该 JSON 文件。
+    Returns:
+        int: 0 全部通过；1 全部失败；2 部分通过。
+    """
+    import json as _json
     import torch
     import torch_npu  # noqa: F401
-    
+
     sys.path.insert(0, verify_dir)
 
     # 加载模块
@@ -229,32 +265,89 @@ def verify_implementations(op_name, verify_dir, triton_impl_name="triton_ascend_
 
     # 解析输入（支持 get_inputs 或 get_input_groups 格式）
     input_groups, total_cases = resolve_input_provider(torch_module)
-    
+
     device = torch.device("npu")
     init_params = get_init_inputs()
 
-    # 对每组输入进行验证
+    passed_cases = []
+    failed_cases = []
+
     for case_idx, inputs in enumerate(input_groups, start=1):
-        # 创建模型（确保权重一致）
-        torch.manual_seed(0)
-        torch.npu.manual_seed(0)
-        framework_model = FrameworkModel(*init_params).to(device)
+        shapes, dtypes = _collect_case_meta(inputs)
+        try:
+            # 创建模型（确保权重一致）
+            torch.manual_seed(0)
+            torch.npu.manual_seed(0)
+            framework_model = FrameworkModel(*init_params).to(device)
 
-        torch.manual_seed(0)
-        torch.npu.manual_seed(0)
-        impl_model = ModelNew(*init_params).to(device)
+            torch.manual_seed(0)
+            torch.npu.manual_seed(0)
+            impl_model = ModelNew(*init_params).to(device)
 
-        # 验证该组输入
-        run_single_case(
-            framework_model, 
-            impl_model, 
-            inputs, 
-            device, 
-            case_idx, 
-            total_cases
+            # 验证该组输入
+            run_single_case(
+                framework_model,
+                impl_model,
+                inputs,
+                device,
+                case_idx,
+                total_cases,
+            )
+            passed_cases.append(case_idx)
+        except Exception as e:
+            err_msg = str(e)
+            if len(err_msg) > 500:
+                err_msg = err_msg[:500] + "...(truncated)"
+            failed_cases.append({
+                "case_idx": case_idx,
+                "shapes": shapes,
+                "dtypes": dtypes,
+                "error": err_msg,
+            })
+            print(
+                f"  [用例 {case_idx}/{total_cases}] 失败: "
+                f"dtypes={dtypes}, shapes={shapes}, error={err_msg[:200]}",
+                file=sys.stderr,
+            )
+            if not continue_on_error:
+                if summary_output:
+                    _write_summary(summary_output, total_cases, passed_cases, failed_cases)
+                raise
+
+    passed = len(passed_cases)
+    failed = len(failed_cases)
+
+    if summary_output:
+        _write_summary(summary_output, total_cases, passed_cases, failed_cases)
+
+    if failed == 0:
+        print(f"验证成功：共 {total_cases} 组测试用例通过")
+        return 0
+    elif passed == 0:
+        print(f"验证失败：共 {total_cases} 组测试用例全部失败", file=sys.stderr)
+        return 1
+    else:
+        print(
+            f"验证部分通过：{passed}/{total_cases} 成功，{failed} 失败",
+            file=sys.stderr,
         )
+        return 2
 
-    print(f"验证成功：共 {total_cases} 组测试用例通过")
+
+def _write_summary(path, total_cases, passed_cases, failed_cases):
+    """写入 verify 摘要 JSON（供上层脚本读取通过率）。"""
+    import json as _json
+    pass_rate = len(passed_cases) / total_cases if total_cases > 0 else 0.0
+    summary = {
+        "total_cases": total_cases,
+        "passed_cases": len(passed_cases),
+        "failed_cases": len(failed_cases),
+        "pass_rate": round(pass_rate, 4),
+        "passed_case_indices": passed_cases,
+        "failed_case_details": failed_cases,
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        _json.dump(summary, f, indent=2, ensure_ascii=False)
 
 
 if __name__ == "__main__":
@@ -273,6 +366,14 @@ if __name__ == "__main__":
         "--_run", action="store_true",
         help=argparse.SUPPRESS,  # 内部参数：子进程模式，直接执行验证
     )
+    parser.add_argument(
+        "--continue_on_error", action="store_true",
+        help="单个 case 失败时继续跑其余 case（终评阶段使用）",
+    )
+    parser.add_argument(
+        "--summary_output", default=None,
+        help="将 verify 摘要（通过/失败明细）写入指定 JSON 文件",
+    )
     args = parser.parse_args()
 
     verify_dir = os.path.abspath(args.verify_dir)
@@ -283,7 +384,12 @@ if __name__ == "__main__":
     if args._run:
         # 子进程模式：直接执行验证逻辑
         try:
-            verify_implementations(args.op_name, verify_dir, args.triton_impl_name)
+            rc = verify_implementations(
+                args.op_name, verify_dir, args.triton_impl_name,
+                continue_on_error=args.continue_on_error,
+                summary_output=args.summary_output,
+            )
+            sys.exit(rc)
         except Exception as e:
             print(f"{e}", file=sys.stderr)
             sys.exit(1)
@@ -296,6 +402,10 @@ if __name__ == "__main__":
             "--triton_impl_name", args.triton_impl_name,
             "--_run",
         ]
+        if args.continue_on_error:
+            cmd.append("--continue_on_error")
+        if args.summary_output:
+            cmd += ["--summary_output", args.summary_output]
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -309,7 +419,7 @@ if __name__ == "__main__":
             if proc.returncode != 0:
                 sys.stderr.buffer.write(stderr)
                 sys.stderr.buffer.flush()
-                sys.exit(proc.returncode)
+            sys.exit(proc.returncode)
 
         except subprocess.TimeoutExpired:
             proc.kill()

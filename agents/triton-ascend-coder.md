@@ -16,6 +16,7 @@ skills:
   - kernel-generator
   - kernel-verifier
   - latency-optimizer
+  - case-simplifier
 ---
 
 # System Prompt
@@ -35,10 +36,11 @@ skills:
 ```
 Phase 0: 参数确认
 Phase 1: 任务构建          (op-task-extractor / GPU Kernel 模式由 Agent 自建)
+Phase 1.5: 测试用例精简    (case-simplifier，仅多 shape 场景)
 Phase 2: 算法设计          (kernel-designer)
-Phase 3: 代码生成与验证    (kernel-generator + kernel-verifier, 迭代)
-Phase 4: 性能优化与验证    (latency-optimizer + kernel-verifier, 迭代)
-Phase 5: 输出报告
+Phase 3: 代码生成与验证    (kernel-generator + kernel-verifier, 迭代，使用精简集)
+Phase 4: 性能优化与验证    (latency-optimizer + kernel-verifier, 迭代，使用精简集)
+Phase 5: 全量终评 + 输出报告
 ```
 
 ---
@@ -122,6 +124,30 @@ python3 -c "import datetime,random; ts=datetime.datetime.now().strftime('%Y%m%d_
    - 验证通过后进入 Phase 2
 
 验证通过后直接进入 Phase 2。
+
+---
+
+## Phase 1.5: 测试用例精简（多 shape 场景才执行）
+
+**触发条件**：
+- Phase 1 产出的 `{op_name}.py` 使用 `get_input_groups()`，且对应的 `.json` 文件存在
+- `.json` 中 case 数 > 10
+
+不满足任一条件 → **跳过本 Phase**，直接进入 Phase 2。
+
+**调用** `case-simplifier` skill，传入 `work_dir = {工作目录}`。
+
+Skill 内部行为：
+1. 将 `{工作目录}/{xxx}.json` 备份为 `{xxx}.json.bak`（供 Phase 5 全量终评恢复）
+2. 按 dtype/shape 维度/极端值/广播覆盖原则，精简到 ≤10 个 case
+3. 精简结果写回 `{xxx}.json`（**原路径**），Phase 3/4 代码无需改动即可自动使用精简集
+
+**约束**：
+- 不修改 `{工作目录}/{op_name}.py`
+- 只操作 `{工作目录}` 内的文件
+- 若 case 数 ≤10，skill 直接跳过（不创建 `.bak`）
+
+⚠️ Phase 3/4 所有 verify/benchmark 调用都基于精简集运行，迭代耗时显著降低。
 
 ---
 
@@ -365,30 +391,90 @@ while opt_iteration < max_opt_iterations:
 
 ---
 
-## Phase 5: 输出报告
+## Phase 5: 全量终评 + 输出报告
 
-**选择最终代码**：
+⚠️ **本 Phase 是必须执行的阶段**。Phase 3/4 用的是精简集（≤10 case），Phase 5 用全量集
+（恢复自 `.json.bak`）跑最终验证 + 性能测试，输出**编译通过率**和**全量加速比**。
+
+### 5.1 选择最终代码
 
 - Phase 4 成功 → `optimized_code.py`
 - Phase 4 失败 → Phase 3 的 `generated_code.py`
 
 复制最终代码到 `{工作目录}/{op_name}_generated.py`。
 
-**写入 `{工作目录}/report.md`**：
+### 5.2 恢复全量数据集
+
+判定条件：`{工作目录}/{xxx}.json.bak` 存在（即 Phase 1.5 执行过精简）。
+
+```bash
+# 恢复全量 .json，覆盖精简集
+cp {工作目录}/{xxx}.json.bak {工作目录}/{xxx}.json
+```
+
+若 `.json.bak` 不存在（说明原始数据 ≤10 case 或单 shape 场景），跳过本步，直接基于现有 `.json` 跑全量。
+
+### 5.3 全量精度验证（终评，宽松）
+
+在 `{工作目录}/output/final_verify/` 下创建：
+- `{op_name}_torch.py`（来自任务文件）
+- `{op_name}_triton_ascend_impl.py`（来自最终代码）
+
+调用 verify.py：
+
+```bash
+python verify.py \
+  --op_name {op_name} \
+  --verify_dir {工作目录}/output/final_verify \
+  --continue_on_error \
+  --summary_output {工作目录}/output/final_verify_summary.json
+```
+
+退出码处理：
+- `0`：全部通过 → `verify_pass_rate = 1.0`
+- `2`：部分通过 → 读取 `final_verify_summary.json` 拿 `pass_rate`
+- `1`：全部失败 → `verify_pass_rate = 0.0`，仍继续 Phase 5.4 出报告（不影响 success 标记）
+
+⚠️ 终评阶段**不重试**任何失败 case，按通过率如实记录。
+
+### 5.4 全量性能测试
+
+调用 benchmark.py（同样宽容部分失败）：
+
+```bash
+python benchmark.py \
+  --op_name {op_name} \
+  --verify_dir {工作目录}/output/final_verify \
+  --continue_on_error \
+  --output {工作目录}/output/final_perf_result.json
+```
+
+**GPU Kernel 模式**：附加 `--skip_framework --framework_latency_ms <gpu_reference_ms>`。
+
+读取 `final_perf_result.json` 中的 `compile_pass_rate`、`speedup_vs_torch`、`successful_cases`、`failed_cases`、`per_shape_results`。
+
+### 5.5 写入 `report.md`
+
 - 基本信息：arch、工作目录
 - 生成结果：迭代次数、最终版本来源
-- **GPU 参考性能**（仅在 GPU Kernel 模式下且找到 `gpu_perf_csv` 时显示）：
-  - GPU 参考延迟
-  - Ascend Triton 延迟
-  - Ascend/GPU 倍数
-- 性能数据：加速比（保留 4 位小数）、延迟
-- 性能明细：读取 `output/perf_result.json` 中的 `per_shape_results`（如 `total_cases == 1`，则显示单条记录；多 shape 时显示多行），
-  以 Markdown 表格形式输出各 shape 的 framework 延迟、implementation 延迟和 speedup（保留 4 位小数）。
+- **GPU 参考性能**（仅 GPU Kernel 模式且找到 `gpu_perf_csv` 时显示）
+- **全量评测概览**（新增）：
+  | 指标 | 值 |
+  |------|-----|
+  | 总 case 数 | {full_total_cases} |
+  | 编译通过 case 数 | {successful_cases} |
+  | 编译通过率 | {compile_pass_rate} |
+  | 精度验证通过率 | {verify_pass_rate} |
+  | 迭代精简集大小 | {iteration_cases}（Phase 3/4 使用） |
+  | 平均加速比（全量成功 case） | {speedup_vs_torch} |
+- 性能明细：读取 `final_perf_result.json` 中的 `per_shape_results`，
+  以 Markdown 表格输出各 shape 的 framework 延迟、implementation 延迟、speedup（保留 4 位小数）
+- 失败 case 摘要（如有）：列出失败 case 的 `case_idx`、`shapes`、`dtypes`、`error` 简述
 - 代码路径：`{op_name}_generated.py`
 
-**写入 `{工作目录}/summary.json`**：
+### 5.6 写入 `summary.json`
 
-**注意**：多 Shape 场景下，`summary.json` 的 `perf_data` 应为 **汇总的平均指标**，包含 `total_cases` 和 `per_shape_results`。批量评测脚本（如 `run_benchmark_triton.sh`）会通过读取 `summary.json` 来生成 `batch_report.md`，因此必须确保多 Shape 数据正确写入，且**原有字段完整保留**。
+**注意**：多 Shape 场景下，`summary.json` 的 `perf_data` 应为 **基于全量评测的汇总指标**，包含 `total_cases`、`successful_cases`、`compile_pass_rate`、`verify_pass_rate`、`per_shape_results`。批量评测脚本（如 `run_benchmark_triton.sh`）会通过读取 `summary.json` 来生成 `batch_report.md`，因此必须确保字段正确写入，且**原有字段完整保留**。
 
 成功时标准格式：
 ```json
@@ -403,15 +489,29 @@ while opt_iteration < max_opt_iterations:
     "avg_latency_ms": 0.5678,
     "speedup_vs_torch": 2.1700,
     "speedup_vs_baseline": 1.35,
-    "total_cases": 5,
+    "total_cases": 52,
+    "successful_cases": 45,
+    "failed_cases": 7,
+    "compile_pass_rate": 0.8654,
+    "verify_pass_rate": 0.8462,
+    "iteration_cases": 10,
     "per_shape_results": [
       {"shape": [128], "speedup_vs_torch": 1.8200},
-      {"shape": [256, 256], "speedup_vs_torch": 2.1500},
-      {"shape": [1024, 1024], "speedup_vs_torch": 2.3100}
+      {"shape": [256, 256], "speedup_vs_torch": 2.1500}
     ]
   }
 }
 ```
+
+**字段说明**：
+- `total_cases`：全量 case 数（恢复 `.json.bak` 后的数量）
+- `successful_cases` / `failed_cases`：全量评测中实际通过/失败的 case 数
+- `compile_pass_rate`：benchmark 阶段成功跑通的 case 占比（编译+运行通过率）
+- `verify_pass_rate`：verify.py 精度验证的通过率
+- `iteration_cases`：Phase 3/4 迭代时使用的精简集大小（若未触发 Phase 1.5，则等于 `total_cases`）
+- `per_shape_results`：仅包含**全量评测中成功 case** 的明细
+- 详细失败 case 信息保存在 `output/final_verify_summary.json` 和 `output/final_perf_result.json` 中（不放进 summary.json，避免膨胀）
+- **失败 case 不影响 `success` 标记**，只通过通过率体现
 
 **GPU Kernel 模式扩展格式**（向后兼容）：
 ```json
@@ -425,14 +525,18 @@ while opt_iteration < max_opt_iterations:
   "gpu_mode": true,
   "perf_data": {
     "avg_latency_ms": 0.4200,
-        "speedup_vs_torch": 0.3700,
+    "speedup_vs_torch": 0.3700,
     "gpu_reference_ms": 0.002072,
     "ascend_vs_gpu_ratio": 202.7,
     "total_cases": 1,
+    "successful_cases": 1,
+    "failed_cases": 0,
+    "compile_pass_rate": 1.0,
+    "verify_pass_rate": 1.0,
     "per_shape_results": [
       {
         "shape": [128, 16, 128],
-    "speedup_vs_torch": 0.3700,
+        "speedup_vs_torch": 0.3700,
         "gpu_reference_ms": 0.002072,
         "ascend_vs_gpu_ratio": 202.7
       }
@@ -441,7 +545,7 @@ while opt_iteration < max_opt_iterations:
 }
 ```
 
-**字段说明**：
+**字段说明（GPU Kernel 模式额外）**：
 - `gpu_mode`: `true` 表示本次任务源自 GPU Kernel 输入模式
 - `perf_data.gpu_reference_ms`: 从 `vllm_gpu_perf.csv` 读取的 GPU 参考延迟（毫秒）
 - `perf_data.ascend_vs_gpu_ratio`: Ascend Triton 延迟 / GPU 延迟 的倍数
@@ -480,12 +584,14 @@ Phase 4 失败时（Phase 3 成功，优化未成功）：
 ```
 ${pwd}/triton_ascend_output/op_{op_name}_{timestamp}_{rid}/
 ├── {op_name}.py                          # Phase 1: KernelBench 任务描述
+├── {xxx}.json                            # Phase 1: 测试用例（Phase 1.5 后变为精简集，Phase 5 恢复为全量）
+├── {xxx}.json.bak                        # Phase 1.5 备份的全量数据集（仅多 shape 场景生成）
 ├── sketch.txt                            # Phase 2: 算法草图
 ├── output/
 │   ├── generated_code.py                 # Phase 3 最终通过验证的代码（副本）
-│   ├── perf_result.json                  # Phase 3 最终性能报告（副本）
+│   ├── perf_result.json                  # Phase 3 最终性能报告（副本，基于精简集）
 │   ├── optimized_code.py                 # Phase 4 最终优化代码（副本，成功时）
-│   ├── iter_0/                           # Phase 3 第 0 轮
+│   ├── iter_0/                           # Phase 3 第 0 轮（基于精简集）
 │   │   ├── generated_code.py
 │   │   ├── verify/
 │   │   │   ├── {op_name}_torch.py
@@ -494,7 +600,7 @@ ${pwd}/triton_ascend_output/op_{op_name}_{timestamp}_{rid}/
 │   │   └── log.md
 │   ├── iter_1/                           # Phase 3 第 1 轮（如有）
 │   │   └── ...
-│   ├── opt_iter_0/                       # Phase 4 第 0 轮
+│   ├── opt_iter_0/                       # Phase 4 第 0 轮（基于精简集）
 │   │   ├── optimized_code.py
 │   │   ├── verify/
 │   │   │   ├── {op_name}_torch.py
@@ -503,11 +609,16 @@ ${pwd}/triton_ascend_output/op_{op_name}_{timestamp}_{rid}/
 │   │   ├── baseline_perf_result.json
 │   │   ├── optimized_perf_result.json
 │   │   └── log.md
-│   └── opt_iter_1/                       # Phase 4 第 1 轮（如有）
-│       └── ...
+│   ├── opt_iter_1/                       # Phase 4 第 1 轮（如有）
+│   │   └── ...
+│   ├── final_verify/                     # Phase 5 全量终评工作目录
+│   │   ├── {op_name}_torch.py
+│   │   └── {op_name}_triton_ascend_impl.py
+│   ├── final_verify_summary.json         # Phase 5 全量精度验证摘要
+│   └── final_perf_result.json            # Phase 5 全量性能测试结果
 ├── {op_name}_generated.py                # Phase 5: 最终代码
-├── summary.json                          # 执行摘要
-└── report.md                             # 最终报告
+├── summary.json                          # 执行摘要（基于全量评测）
+└── report.md                             # 最终报告（含全量通过率与加速比）
 ```
 
 ---
@@ -519,6 +630,8 @@ ${pwd}/triton_ascend_output/op_{op_name}_{timestamp}_{rid}/
 | Phase 1 (模式 A) | 任务文件验证失败 | 修复重试（最多 2 次） |
 | Phase 1 (模式 B) | `.pt` 文件不存在 | 报错终止，提示用户上传同名 `.pt` |
 | Phase 1 (模式 B) | `Model` 翻译验证失败 | 修复重试（最多 2 次） |
+| Phase 1.5 | 找不到唯一 `.json` | 报错终止 |
+| Phase 1.5 | case 数 ≤10 | 跳过精简，直接进入 Phase 2 |
 | Phase 3 | 达到 max_iterations | 输出失败报告，任务结束 |
 | Phase 3 | B 类环境错误 | 立即终止，任务失败 |
 | Phase 3 | C 类重复错误 | 立即终止，任务失败 |
@@ -532,9 +645,13 @@ ${pwd}/triton_ascend_output/op_{op_name}_{timestamp}_{rid}/
 | 约束 | 说明 |
 |------|------|
 | GPU Kernel 模式 | `.pt` 必须与 `.py` 同名同目录；`vllm_gpu_perf.csv` 向上查找最多 3 级 |
+| Phase 1.5 触发 | 仅在多 shape 且 case > 10 时触发；精简后 ≤ 10 |
 | Phase 3 最大迭代 | 5 次，禁止超出 |
+| Phase 3/4 数据集 | 使用精简集 `{xxx}.json`（即原 `.json` 被 Phase 1.5 替换后的内容） |
 | Phase 4 最大迭代 | 3 次，禁止超出 |
 | Phase 4 成功底线 | 性能超过基线 Triton 实现 5% |
+| Phase 5 数据集 | 必须先恢复 `.json.bak` 为全量集；终评不重试任何失败 case |
+| Phase 5 失败容忍 | 全量评测部分 case 失败不影响 success 标记，仅记录通过率 |
 | A 类连续上限 | 同一子类型连续 ≥ 3 次 → 自动终止 |
 | 禁止 PyTorch 退化 | forward() 中禁止 torch.*/F.* 计算操作 |
 | 文件操作范围 | 限制在工作目录内 |

@@ -34,6 +34,7 @@ class BenchmarkConfig:
     repeats: int = REPEATS_DEFAULT
     skip_framework: bool = False
     framework_latency_ms: float = 0.0
+    continue_on_error: bool = False
 
 
 @dataclass
@@ -63,11 +64,16 @@ class BenchmarkResult:
     implementation: PerformanceResult
     speedup_vs_torch: float
     total_cases: int = 1
+    successful_cases: int = 1
+    failed_cases: int = 0
+    failed_case_details: List[Dict[str, Any]] = None
     per_shape_results: List[SingleShapeResult] = None
 
     def __post_init__(self):
         if self.per_shape_results is None:
             self.per_shape_results = []
+        if self.failed_case_details is None:
+            self.failed_case_details = []
 
 
 # ============================================================================
@@ -513,54 +519,94 @@ def compute_overall_average(results: List[SingleShapeResult]) -> Tuple[Performan
     )
 
 
+def _collect_case_meta(inputs):
+    """收集当前 case 的元信息（shapes + dtypes），供失败汇报使用。"""
+    import torch
+    shapes = []
+    dtypes = []
+    for x in inputs:
+        if isinstance(x, torch.Tensor):
+            shapes.append(list(x.shape))
+            dtypes.append(str(x.dtype).replace("torch.", ""))
+    return shapes, dtypes
+
+
 def benchmark_implementations(config: BenchmarkConfig) -> BenchmarkResult:
     """执行完整的性能测试，支持多组输入。"""
     import torch
     import torch_npu
-    
+
     device = torch.device("npu")
-    
+
     # 解析输入（支持单组/多组格式）
     input_groups = resolve_inputs(config.op_name, config.verify_dir)
     total_cases = len(input_groups)
-    
+
     # 加载模块创建函数引用
     sys.path.insert(0, config.verify_dir)
     torch_module = __import__(f"{config.op_name}_torch")
     impl_module = __import__(f"{config.op_name}_{config.triton_impl_name}")
-    
+
     FrameworkModel = torch_module.Model
     ModelNew = impl_module.ModelNew
     get_init_inputs = torch_module.get_init_inputs
-    
+
     # 对每组输入进行测试
     per_shape_results: List[SingleShapeResult] = []
-    
+    failed_case_details: List[Dict[str, Any]] = []
+
     for case_idx, inputs in enumerate(input_groups, start=1):
-        # 创建模型（确保权重一致）
-        init_params = get_init_inputs()
-        torch.manual_seed(0)
-        torch.npu.manual_seed(0)
-        framework_model = FrameworkModel(*init_params).to(device)
-        
-        torch.manual_seed(0)
-        torch.npu.manual_seed(0)
-        impl_model = ModelNew(*init_params).to(device)
-        
-        # 测试该组输入
-        shape_result = run_single_benchmark(
-            framework_model, impl_model, inputs, config, device, case_idx, total_cases
+        shapes, dtypes = _collect_case_meta(inputs)
+        try:
+            # 创建模型（确保权重一致）
+            init_params = get_init_inputs()
+            torch.manual_seed(0)
+            torch.npu.manual_seed(0)
+            framework_model = FrameworkModel(*init_params).to(device)
+
+            torch.manual_seed(0)
+            torch.npu.manual_seed(0)
+            impl_model = ModelNew(*init_params).to(device)
+
+            # 测试该组输入
+            shape_result = run_single_benchmark(
+                framework_model, impl_model, inputs, config, device, case_idx, total_cases
+            )
+            per_shape_results.append(shape_result)
+        except Exception as e:
+            err_msg = str(e)
+            if len(err_msg) > 500:
+                err_msg = err_msg[:500] + "...(truncated)"
+            failed_case_details.append({
+                "case_idx": case_idx,
+                "shapes": shapes,
+                "dtypes": dtypes,
+                "error": err_msg,
+            })
+            print(
+                f"  [用例 {case_idx}/{total_cases}] 性能测试失败: "
+                f"dtypes={dtypes}, shapes={shapes}, error={err_msg[:200]}",
+                file=sys.stderr,
+            )
+            if not config.continue_on_error:
+                raise
+
+    successful_cases = len(per_shape_results)
+    failed_cases_num = len(failed_case_details)
+
+    if successful_cases == 0:
+        raise RuntimeError(
+            f"所有 {total_cases} 组用例全部测试失败，无有效性能数据"
         )
-        per_shape_results.append(shape_result)
-    
-    # 计算总体平均值
-    if total_cases == 1:
+
+    # 计算总体平均值（仅基于成功的 case）
+    if successful_cases == 1:
         overall_fw = per_shape_results[0].framework
         overall_impl = per_shape_results[0].implementation
         overall_speedup = per_shape_results[0].speedup_vs_torch
     else:
         overall_fw, overall_impl, overall_speedup = compute_overall_average(per_shape_results)
-    
+
     return BenchmarkResult(
         op_name=config.op_name,
         warmup=config.warmup,
@@ -569,17 +615,27 @@ def benchmark_implementations(config: BenchmarkConfig) -> BenchmarkResult:
         implementation=overall_impl,
         speedup_vs_torch=overall_speedup,
         total_cases=total_cases,
-        per_shape_results=per_shape_results
+        successful_cases=successful_cases,
+        failed_cases=failed_cases_num,
+        failed_case_details=failed_case_details,
+        per_shape_results=per_shape_results,
     )
 
 
 def result_to_dict(result: BenchmarkResult) -> Dict[str, Any]:
     """将BenchmarkResult转换为字典格式，多组输入时包含每个shape的详情"""
+    compile_pass_rate = (
+        result.successful_cases / result.total_cases
+        if result.total_cases > 0 else 0.0
+    )
     base_dict = {
         "op_name": result.op_name,
         "warmup": result.warmup,
         "repeats": result.repeats,
         "total_cases": result.total_cases,
+        "successful_cases": result.successful_cases,
+        "failed_cases": result.failed_cases,
+        "compile_pass_rate": round(compile_pass_rate, 4),
         "framework": {
             "avg_latency_ms": result.framework.avg_latency_ms,
             "peak_memory_mb": result.framework.peak_memory_mb,
@@ -590,9 +646,10 @@ def result_to_dict(result: BenchmarkResult) -> Dict[str, Any]:
             "peak_memory_mb": result.implementation.peak_memory_mb,
             "operators": {name: round(avg_us, 4) for name, avg_us in result.implementation.operators.items()}
         },
-        "speedup_vs_torch": result.speedup_vs_torch
+        "speedup_vs_torch": result.speedup_vs_torch,
+        "failed_case_details": result.failed_case_details,
     }
-    
+
     # 多组输入时，记录每组的详细结果
     if result.total_cases > 1 and result.per_shape_results:
         base_dict["per_shape_results"] = [
@@ -610,7 +667,7 @@ def result_to_dict(result: BenchmarkResult) -> Dict[str, Any]:
             }
             for r in result.per_shape_results
         ]
-    
+
     return base_dict
 
 
@@ -631,6 +688,8 @@ def main():
                        help="跳过 framework 性能测试（GPU Kernel 模式使用）")
     parser.add_argument("--framework_latency_ms", type=float, default=0.0,
                        help="预设的 framework 参考延迟（毫秒），用于计算 speedup")
+    parser.add_argument("--continue_on_error", action="store_true",
+                       help="单个 case 失败时继续跑其余 case（终评阶段使用）")
     args = parser.parse_args()
     
     # 验证目录
@@ -648,6 +707,7 @@ def main():
         repeats=args.repeats,
         skip_framework=args.skip_framework,
         framework_latency_ms=args.framework_latency_ms,
+        continue_on_error=args.continue_on_error,
     )
     
     try:

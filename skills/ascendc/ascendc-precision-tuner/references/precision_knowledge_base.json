@@ -1,0 +1,164 @@
+[
+  {
+    "title": "尾块 Padding 值污染计算结果 (Tail Padding Contamination)",
+    "feature": "pattern=tail_spike, 最后一维尾部区域 mismatch 显著高于主体, 尾块长度等于 last_dim % tile_size",
+    "reason": "CopyIn 后尾块的 padding 区域包含脏数据 (0 或未初始化值), 这些值参与了后续向量操作。AscendC DataCopy 按 32 字节对齐传输, 尾块不足部分的 buffer 内容不确定。",
+    "fix": "CopyIn 前先用 Duplicate 初始化整个 buffer (Sum/Mean 用 0, Max 用 -INFINITY, Min 用 +INFINITY); 或确保所有向量操作的 count 参数使用对齐的 tileLength 而非动态 actualLength, 配合正确的 padding 值。",
+    "type": "FIX_PRECISION_TAIL"
+  },
+  {
+    "title": "向量操作使用动态有效长度 (Vector Op Dynamic Count)",
+    "feature": "pattern=tail_spike 或 boundary_concentration, 向量操作 count 参数使用 validLen/actualLen 等动态变量",
+    "reason": "AscendC 向量操作要求 count 参数满足对齐约束 (float32: 8 的倍数, float16: 16 的倍数)。使用动态有效长度会在尾块处理时违反对齐要求, 导致不可预测的结果。",
+    "fix": "所有 Add/Sub/Mul/Div/Exp 等向量操作使用固定对齐的 tileLength 作为 count 参数, 通过 CopyIn 时的 padding 初始化来保证尾块安全。",
+    "type": "FIX_PRECISION_TAIL"
+  },
+  {
+    "title": "归约操作 Padding 值语义不匹配 (Reduce Padding Semantic Mismatch)",
+    "feature": "pattern=uniform_offset, 全局偏移, 所有元素偏大或偏小",
+    "reason": "CopyIn padding 默认为 0, 但不同归约操作对 padding 值有不同语义要求: ReduceMax 中 padding=0 会覆盖负值区域; ReduceMean 中 padding 元素会稀释均值; ReduceMin 中 padding=0 会覆盖正值区域。",
+    "fix": "根据归约类型选择 padding 值: ReduceMax 用 -INFINITY, ReduceMin 用 +INFINITY, ReduceSum 用 0, ReduceMean 需排除 padding 数量或用 0 并调整分母。",
+    "type": "FIX_PRECISION_PADDING"
+  },
+  {
+    "title": "TBuf 异步 DataCopy 数据竞争 (TBuf Async Data Race)",
+    "feature": "pattern=scattered, 随机位置出现小偏差, 多次运行结果不一致",
+    "reason": "TBuf (VECCALC) 上的 DataCopy 是异步操作, 没有内置同步机制。如果 DataCopy 还未完成就开始向量计算, 会读到不完整的数据, 导致随机精度偏差。",
+    "fix": "方案 A (推荐): 改用 TQue (VECIN/VECOUT), DataCopy + EnQue/DeQue 自动同步。方案 B: 使用 SetFlag/WaitFlag 显式同步。",
+    "type": "FIX_PRECISION_SYNC"
+  },
+  {
+    "title": "Float16 归约累加精度损失 (Float16 Reduction Precision Loss)",
+    "feature": "pattern=magnitude_correlated 或 scattered, 大量小值累加时整体偏差较大",
+    "reason": "Float16 只有 10 位尾数, 大量小值直接累加会导致精度损失 (大数吃小数效应)。NPU 并行归约的累加顺序与 CPU 串行不同, 可能放大此效应。",
+    "fix": "归约前 Cast 到 float32, 归约后 Cast 回 float16。",
+    "type": "FIX_PRECISION_TYPECAST"
+  },
+  {
+    "title": "数据布局不一致导致维度级错误 (Data Layout Mismatch)",
+    "feature": "pattern=dimension_concentration, 某个 batch/channel 维度整体错误",
+    "reason": "Host 端 format 设置与 Kernel 中的 GM 偏移计算实际假设的布局不一致, 或多维索引中 stride 计算错误。",
+    "fix": "检查 op_host.cpp 中 SetFormat 设置; 检查 op_kernel.cpp 中 GM 偏移 stride 表达式; 确保与参考实现一致。",
+    "type": "FIX_PRECISION_LAYOUT"
+  },
+  {
+    "title": "除零或 Exp 溢出产生 NaN/Inf (Div-by-Zero or Exp Overflow)",
+    "feature": "pattern=nan_inf_contamination, NPU 输出包含 NaN 或 Inf",
+    "reason": "Div 除数为零产生 Inf; Exp 输入过大 (float32 下 exp(88) ≈ 1.65e38) 溢出。",
+    "fix": "除法: 分母加 epsilon。Exp: 输入 clamp 到安全范围。AllocTensor 后 Duplicate 初始化。",
+    "type": "FIX_PRECISION_OVERFLOW"
+  },
+  {
+    "title": "ReduceMax/ReduceSum count 未对齐 (Reduce Count Alignment)",
+    "feature": "pattern=tail_spike 或 scattered, Reduce 操作在非对齐 count 上产生错误结果",
+    "reason": "AscendC Reduce 要求 count 为特定值的倍数 (float32 下 64 的倍数), 不满足时硬件行为未定义。",
+    "fix": "对齐 count: alignedCount = ((count + 63) / 64) * 64, 配合 buffer padding 初始化。",
+    "type": "FIX_PRECISION_REDUCTION"
+  },
+  {
+    "title": "Host InferShape 与 Kernel 偏移计算不一致 (InferShape Mismatch)",
+    "feature": "pattern=all_wrong 或 dimension_concentration, 输出形状正确但数值全错",
+    "reason": "op_host.cpp InferShape 与 op_kernel.cpp GM 偏移计算不一致, 特别是涉及 stride/padding/dilation 时。",
+    "fix": "逐步对比 InferShape 输出维度公式与 Kernel GM 偏移计算, 检查 TilingData 参数传递。",
+    "type": "FIX_PRECISION_LOGIC"
+  },
+  {
+    "title": "[CHECKLIST] Reduction 类算子精度检查清单",
+    "feature": "op_type=reduction, 适用于 ReduceSum/ReduceMax/ReduceMean/Softmax/LayerNorm 等",
+    "reason": "归约类算子最常见的精度问题来自: float16 累加损失、count 对齐、padding identity 值、tiling 边界处理。",
+    "fix": "检查项: (1) float16 是否提升到 float32 累加 (2) Reduce count 是否 64 倍数对齐 (3) padding 值是否匹配归约语义 (Sum→0, Max→-INF) (4) tiling 边界 tile 是否正确处理",
+    "type": "FIX_PRECISION_REDUCTION"
+  },
+  {
+    "title": "[CHECKLIST] Pooling 类算子精度检查清单",
+    "feature": "op_type=pooling, 适用于 AvgPool2d/MaxPool2d/AdaptiveAvgPool 等",
+    "reason": "池化类算子的精度问题主要来自: padding 区域计算、窗口边界对齐、除法取整。",
+    "fix": "检查项: (1) padding 区域是否正确参与/排除计算 (2) 窗口边界是否与 stride 正确对齐 (3) AvgPool 的除数是否排除 padding 元素 (4) 边缘窗口是否正确处理",
+    "type": "FIX_PRECISION_PADDING"
+  },
+  {
+    "title": "[CHECKLIST] Loss 类算子精度检查清单",
+    "feature": "op_type=loss, 适用于 MSELoss/CrossEntropyLoss/NLLLoss 等",
+    "reason": "损失函数的精度问题主要来自: mean 分母计算、sqrt 精度、数值范围。",
+    "fix": "检查项: (1) mean 的分母是否正确 (特别是 reduction='mean' 时) (2) sqrt/log 的输入是否加了 epsilon 保护 (3) 中间结果是否可能溢出",
+    "type": "FIX_PRECISION_LOGIC"
+  },
+  {
+    "title": "[CHECKLIST] MatMul 类算子精度检查清单",
+    "feature": "op_type=matmul, 适用于 MatMul/BMM/Linear 等",
+    "reason": "矩阵乘法的精度问题主要来自: 分块计算边界、累加精度、bias 加法。",
+    "fix": "检查项: (1) 分块边界 (M/N/K 维度) 的 tile 是否正确处理 (2) 内积累加是否使用 float32 (3) bias 加法的广播是否正确",
+    "type": "FIX_PRECISION_LOGIC"
+  },
+  {
+    "title": "[CHECKLIST] Normalization 类算子精度检查清单",
+    "feature": "op_type=normalization, 适用于 LayerNorm/BatchNorm/GroupNorm 等",
+    "reason": "归一化算子的精度问题主要来自: epsilon 稳定性、variance 计算精度、affine 变换。",
+    "fix": "检查项: (1) variance 计算: 使用 E[x^2] - (E[x])^2 还是直接计算, 前者在大值时不稳定 (2) epsilon 是否在除法前加入 (3) gamma/beta affine 变换是否正确应用 (4) mean/var 的归约维度是否正确",
+    "type": "FIX_PRECISION_LOGIC"
+  },
+  {
+    "title": "归约轴切分破坏导致局部归约错误 (Reduction Axis Split Error)",
+    "feature": "pattern=all_wrong 或 uniform_offset, 涉及 Softmax/LayerNorm/ReduceSum 等归约算子, mismatch 广泛分布",
+    "reason": "Host 端 Tiling 采用默认线性切分, 将需要归约的轴切断分给了不同的核或 Tile, 导致每个核只看到局部数据, 归约结果不正确。例如 Softmax 的 dim=-1 轴应在单核内完整处理, 若被切分则每核只算局部 max/sum。",
+    "fix": "修改 Host Tiling 代码, 确保归约维度在单核内完整处理。检查 op_host.cpp 中 tileLength 是否覆盖归约轴全长; 若归约轴超出 UB 容量, 改用多趟归约策略 (Pass 1: 局部归约 → 跨 tile 累加器合并)。",
+    "type": "FIX_PRECISION_REDUCTION"
+  },
+  {
+    "title": "超大归约维强制分块时全局累加器未正确维护 (Large Reduction Dim Tiling)",
+    "feature": "pattern=all_wrong 或 uniform_offset, 归约维度远大于单核 UB 容量, 需要多次 CopyIn 累加",
+    "reason": "归约维度超出 UB 容量时需要分块多次加载, 但每次 Reduce 操作只看到当前块的数据, 全局累加器 (如 row_max, exp_sum, partial_mean) 未正确跨块维护。例如 Softmax 三趟遍历中 row_max 必须是全行最大值而非当前 tile 最大值。",
+    "fix": "实现多趟归约: 分块 CopyIn + 块内 Reduce + 跨块累加器更新。确保全局累加器初始化正确 (Max→-INF, Sum→0, Min→+INF), 每块 Reduce 后与全局累加器合并 (Max 取 max, Sum 取 +=)。",
+    "type": "FIX_PRECISION_REDUCTION"
+  },
+  {
+    "title": "跨核 Workspace 归约未正确同步或初始化 (Cross-Core Workspace Reduction)",
+    "feature": "pattern=scattered 或 uniform_offset, 涉及多核 partial sum + Core 0 全局汇总的算子 (MSELoss/ReduceMean/全局归约等)",
+    "reason": "各核将 partial sum 写入 GM workspace, Core 0 读取汇总。若 workspace 未初始化、写入未同步 (DataCopy 异步)、或 Core 0 读取时其他核尚未写完, 结果不确定。另外 Phase 2 的 ReduceSum count=n_cores 不满足 64 倍数对齐。",
+    "fix": "确保 workspace GM buffer 初始化为 0; 各核写入后使用 pipe_barrier 或等效同步; Core 0 读取前确认所有核已完成; Phase 2 的 ReduceSum count 对齐到 64, padding 为 0; 最终除法分母使用 total_elems 而非 per-core 或 n_cores。",
+    "type": "FIX_PRECISION_SYNC"
+  },
+  {
+    "title": "Softmax ReduceMax/ReduceSum work buffer 未初始化导致分母偏大 (Work Buffer Uninitialized)",
+    "feature": "uniform_offset 模式，全局负偏差，actual < golden，bias_direction=negative，mismatch 均匀分布于所有行，无尾块集中",
+    "reason": "AscendC ReduceMax 和 ReduceSum 的第三参数 work_local 在调用前未用 Duplicate 初始化。ReduceMax 要求初始化为 -INF，ReduceSum 要求初始化为 0。未初始化时 work buffer 包含历史脏数据，使归约结果偏大，softmax 分母偏大导致所有输出值系统性偏小。",
+    "fix": "在每次 ReduceMax 调用前加 Duplicate(work_buf, -INFINITY, count)；在每次 ReduceSum 调用前加 Duplicate(work_buf, 0, count)。若 work buffer 与结果 buffer 共用（如 sharedLocalTensor 同时作为 dst 和 work），需特别注意初始化时机在调用之前而非之后。",
+    "type": "FIX_PRECISION_PADDING",
+    "_meta": {
+      "op_name": "softmax",
+      "created_at": "2026-03-23T21:57:05.045327",
+      "attempts_needed": 3
+    }
+  },
+  {
+    "title": "TBuf 绕过 outQueue 导致输出全零 (TBuf DataCopy Bypass Zero Output)",
+    "feature": "pattern=all_wrong, op_type=pooling, 100% mismatch, actual 输出≈0 (量级 1e-41), 输出不含 NaN/Inf, sign_analysis 全为 negative",
+    "reason": "Kernel CopyOut 函数中, maxBuf 等 TBuf<VECCALC> 变量直接作为 DataCopy 的 src 写 GM, 绕过了 outQueue (TQue<VECOUT>) 的 EnQue/DeQue 同步机制。TBuf 分配在 UB 的 VECCALC 区域, 非 DMA 可访问区域, DataCopy 从此处读到接近 0 的脏数据, 导致输出全零。",
+    "fix": "CopyOut 中改用 outQueue 流程: (1) outLocal = outQueue.AllocTensor(); (2) 将计算结果写入 outLocal (DataCopy 或向量赋值); (3) outQueue.EnQue(outLocal); (4) outLocal2 = outQueue.DeQue(); (5) DataCopy(outputGm, outLocal2); (6) outQueue.FreeTensor(outLocal2)。核心原则: GM 写入的 src 必须来自 outQueue DeQue 后的 tensor, 不能直接用 TBuf.Get() 的结果。",
+    "type": "FIX_PRECISION_SYNC"
+  },
+  {
+    "title": "Cumsum 输出全零 (TBuf Direct DataCopy)",
+    "feature": "pattern=all_wrong, actual output 全零, mismatch_ratio 接近 100%",
+    "reason": "Kernel 中 TBuf 中间结果被直接用于 DataCopy 写回 GM，但 TBuf 不参与 outQueue 同步机制，导致数据实际未写出。",
+    "fix": "确保所有 GM 写操作都通过 VECOUT TQue 的 EnQue/DeQue 流程，禁止将 TBuf.Get() 直接作为 DataCopy 的源或目标。",
+    "type": "FIX_PRECISION_LOGIC",
+    "_meta": {
+      "op_name": "cumsum",
+      "created_at": "2026-04-14T01:08:55.994229",
+      "attempts_needed": 2
+    }
+  },
+  {
+    "title": "Cumsum Host Tiling 与 Python 转置逻辑不一致导致输出全零 (Cumsum Host Tiling Mismatch)",
+    "feature": "all_wrong 模式，actual_value 全为 0，Kernel 未写入数据，或部分不匹配且数值偏离",
+    "reason": "Python 层的 transpose 逻辑与 Host Tiling 函数对 scan 轴的假设不一致。当 cumsum_custom.py 使用 permute 将 scan 维度移到 axis 0 时，Host Tiling 仍按固定 dim(0) 或最后一维计算 scanLen，导致 tasksPerCore=0 或数据布局错配，Kernel 循环未执行或读取了错误位置的数据。",
+    "fix": "统一 Python 层与 Host Tiling 的维度转置约定：若 Python 将 scan 轴移到 axis 0，则 Host Tiling 的 scanLen 必须取 GetDim(0)；若使用其他转置策略，Kernel 的 GM offset 计算需相应调整。同时检查 TQue 深度是否支持 scanLen 次循环的流水线模式，避免队列满导致 NPU 死锁。",
+    "type": "FIX_PRECISION_LOGIC",
+    "_meta": {
+      "op_name": "cumsum",
+      "created_at": "2026-04-14T02:01:16.376175",
+      "attempts_needed": 3
+    }
+  }
+]

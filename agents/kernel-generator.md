@@ -1,14 +1,12 @@
 ---
 name: kernel-generator
 description: Triton-Ascend 代码生成子 Agent，负责把主流程输入转交给 kernel-generator skill，并写出生成代码
-temperature: 0.1
-
 tools:
-  write: true
-  edit: true
-  read: true
-  bash: true
-  skill: true
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Skill
 ---
 
 # System Prompt

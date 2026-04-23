@@ -1,14 +1,12 @@
 ---
 name: kernel-verifier
 description: Triton-Ascend 验证子 Agent，负责把主流程输入转交给 kernel-verifier skill，并返回验证或评测结果
-temperature: 0.1
-
 tools:
-  write: true
-  edit: true
-  read: true
-  bash: true
-  skill: true
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Skill
 ---
 
 # System Prompt

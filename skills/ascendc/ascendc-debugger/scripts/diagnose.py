@@ -60,6 +60,14 @@ class AscendCDiagnoser:
                 "reason": "Skipped due to earlier failure",
             }
 
+        # Debug stub detection: only when compile passes but verify fails
+        if (
+            report["checks"]["degenerate"]["passed"]
+            and report["checks"]["compile"]["passed"]
+            and report["checks"]["verify"]["passed"] is False
+        ):
+            report["checks"]["debug_stub"] = self._detect_debug_stub()
+
         report["failure_mode"] = self._determine_failure_mode(report)
 
         # Save report
@@ -243,6 +251,24 @@ class AscendCDiagnoser:
                     "raw": line,
                 }
                 errors.append(entry)
+                continue
+
+            # Build cache / stale artifact error (e.g. ld.lld: unknown file type)
+            cache_match = re.match(
+                r".*(?:unknown file type|file format not recognized|corrupted).*",
+                line,
+            )
+            if cache_match:
+                entry = {
+                    "file": "linker",
+                    "line": 0,
+                    "column": 0,
+                    "severity": "error",
+                    "message": line,
+                    "category": "cache_error",
+                    "raw": line,
+                }
+                errors.append(entry)
 
         return errors, warnings
 
@@ -251,6 +277,7 @@ class AscendCDiagnoser:
         msg = message.lower()
 
         patterns = [
+            ("cache_error", r"unknown file type|file format not recognized|corrupted"),
             ("undefined_api", r"was not declared|undeclared identifier|no member named"),
             ("type_mismatch", r"cannot convert|no matching function|invalid conversion|incompatible types"),
             ("syntax", r"expected|missing|syntax error|unexpected token|invalid token"),
@@ -288,7 +315,7 @@ class AscendCDiagnoser:
                 [sys.executable, str(verify_script), self.task_name],
                 capture_output=True,
                 text=True,
-                timeout=120,
+                timeout=300,
                 cwd=str(self.workdir),
                 env=env,
             )
@@ -352,8 +379,163 @@ class AscendCDiagnoser:
         }
 
     # ================================================================
+    # Debug Stub Detection
+    # ================================================================
+
+    def _detect_debug_stub(self) -> dict:
+        """
+        Detect whether the kernel contains debug stubs (hardcoded constants
+        written to output tensors instead of real computation).
+        """
+        kernel_dir = self.task_dir / "kernel"
+        if not kernel_dir.exists():
+            return {"detected": False, "reason": "kernel/ directory not found"}
+
+        source_files = list(kernel_dir.glob("*.cpp")) + list(kernel_dir.glob("*.h"))
+        if not source_files:
+            return {"detected": False, "reason": "No kernel source files found"}
+
+        # Patterns that indicate debug stubs
+        stub_patterns = [
+            # SetValue with constant in Compute/Process methods
+            re.compile(
+                r"(SetValue\s*\(\s*\w+\s*,\s*-?\d+(\.\d+)?f?\s*\))",
+                re.IGNORECASE,
+            ),
+            # Direct constant assignment to output buffers inside compute functions
+            re.compile(
+                r"(y\w*Local_\.SetValue|out\w*Local_\.SetValue|scale\w*Local_\.SetValue)",
+                re.IGNORECASE,
+            ),
+        ]
+
+        evidence = []
+        affected_files = set()
+        total_output_writes = 0
+        constant_writes = 0
+        loop_constant_fills = 0
+
+        def _is_constant_value(val: str) -> bool:
+            """Check if a value expression is a numeric constant."""
+            val = val.strip()
+            # Direct number
+            if re.match(r"^-?\d+(\.\d+)?f?$", val):
+                return True
+            # static_cast<T>(NUMBER)
+            if re.match(r"static_cast\s*<\s*\w+\s*>\s*\(\s*-?\d+(\.\d+)?f?\s*\)", val):
+                return True
+            return False
+
+        for src_file in source_files:
+            try:
+                content = src_file.read_text(encoding="utf-8")
+            except Exception:
+                continue
+
+            # Split into functions roughly
+            func_blocks = re.split(r"(__aicore__\s+inline\s+void\s+\w+)", content)
+            in_compute_func = False
+            current_func = ""
+
+            for i, block in enumerate(func_blocks):
+                if re.match(r"__aicore__\s+inline\s+void\s+(Compute|Process)", block):
+                    in_compute_func = True
+                    current_func = block.strip().split()[-1]
+                elif in_compute_func:
+                    # Check for SetValue calls in this block
+                    setvalue_matches = re.findall(
+                        r"(\w+Local_)\.SetValue\s*\(\s*(\w+|\d+)\s*,\s*([^;)]+)\s*\)",
+                        block,
+                    )
+                    for local_var, idx, val in setvalue_matches:
+                        total_output_writes += 1
+                        if _is_constant_value(val):
+                            constant_writes += 1
+                            evidence.append(
+                                f"{src_file.name}::{current_func}: {local_var}.SetValue({idx}, {val.strip()})"
+                            )
+                            affected_files.add(str(src_file.name))
+
+                    # Check for loop-filling output with constants (strong signal)
+                    # Find for loops and check if their bodies contain constant SetValue
+                    for_match = re.search(r"for\s*\([^)]+\)\s*\{", block)
+                    if for_match:
+                        brace_start = for_match.end() - 1
+                        brace_end = self._find_matching_brace(block, brace_start)
+                        if brace_end > brace_start:
+                            loop_body = block[brace_start + 1 : brace_end]
+                            for line in loop_body.split("\n"):
+                                sv_match = re.search(r"(\w+Local_)\.SetValue\s*\(", line)
+                                if sv_match:
+                                    local_var = sv_match.group(1)
+                                    rest = line[sv_match.end() :]
+                                    # Extract args by matching parentheses
+                                    depth = 1
+                                    j = 0
+                                    while j < len(rest) and depth > 0:
+                                        if rest[j] == "(":
+                                            depth += 1
+                                        elif rest[j] == ")":
+                                            depth -= 1
+                                        j += 1
+                                    args_str = rest[: j - 1].strip()
+                                    args = [a.strip() for a in args_str.split(",", 1)]
+                                    if len(args) == 2 and _is_constant_value(args[1]):
+                                        loop_constant_fills += 1
+                                        evidence.append(
+                                            f"{src_file.name}::{current_func}: LOOP_FILL {local_var}.SetValue({args[0]}, {args[1]})"
+                                        )
+                                        affected_files.add(str(src_file.name))
+
+                    in_compute_func = False
+                    current_func = ""
+
+        # Heuristic: loop-filling with constants is a definitive debug stub signal
+        is_stub = False
+        confidence = "low"
+        if loop_constant_fills > 0:
+            is_stub = True
+            confidence = "high"
+        elif total_output_writes > 0 and constant_writes > 0:
+            ratio = constant_writes / total_output_writes
+            if ratio >= 0.5:
+                is_stub = True
+                confidence = "high" if ratio == 1.0 else "medium"
+            elif constant_writes >= 2:
+                # Multiple constant writes are suspicious even if ratio is below 0.5
+                is_stub = True
+                confidence = "medium"
+        elif constant_writes >= 1 and total_output_writes == 0:
+            # Only constant writes found
+            is_stub = True
+            confidence = "medium"
+
+        return {
+            "detected": is_stub,
+            "confidence": confidence,
+            "constant_writes": constant_writes,
+            "total_output_writes": total_output_writes,
+            "loop_constant_fills": loop_constant_fills,
+            "affected_files": sorted(list(affected_files)),
+            "evidence": evidence,
+        }
+
+    # ================================================================
     # Helpers
     # ================================================================
+
+    @staticmethod
+    def _find_matching_brace(text: str, open_idx: int) -> int:
+        """Find the index of the matching closing brace."""
+        depth = 1
+        i = open_idx + 1
+        while i < len(text) and depth > 0:
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+            i += 1
+        return i - 1 if depth == 0 else -1
 
     def _determine_failure_mode(self, report: dict) -> Optional[str]:
         checks = report["checks"]
@@ -365,6 +547,9 @@ class AscendCDiagnoser:
             return "compile"
 
         if checks["verify"]["passed"] is False:
+            # Debug stub takes precedence over precision
+            if "debug_stub" in checks and checks["debug_stub"].get("detected"):
+                return "debug_stub"
             if checks["verify"].get("is_precision_issue", False):
                 return "precision"
             return "verify"
@@ -412,6 +597,16 @@ class AscendCDiagnoser:
                 print(f"    Match rate: {metrics['match_rate']:.2f}%")
             if "max_abs_diff" in metrics:
                 print(f"    Max abs diff: {metrics['max_abs_diff']:.6e}")
+
+        elif mode == "debug_stub":
+            stub = report["checks"]["debug_stub"]
+            print(f"  Verification: DEBUG STUB DETECTED")
+            print(f"    Confidence: {stub.get('confidence', 'unknown')}")
+            print(f"    Constant writes: {stub.get('constant_writes', 0)}/{stub.get('total_output_writes', 0)}")
+            if stub.get("affected_files"):
+                print(f"    Affected files: {', '.join(stub['affected_files'])}")
+            if stub.get("evidence"):
+                print(f"    Evidence: {stub['evidence'][0]}")
 
         elif mode == "verify":
             ver = report["checks"]["verify"]

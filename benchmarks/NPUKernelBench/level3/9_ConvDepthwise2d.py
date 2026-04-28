@@ -10,7 +10,7 @@ class Model(nn.Module):
     def __init__(self):
         super(Model, self).__init__()
     
-    def forward(self, x: torch.Tensor, in_channels, kernel_size, stride=1, padding=0, bias=True) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, in_channels, kernel_size, stride=1, padding=0, bias=True, seed=0) -> torch.Tensor:
         """
         Applies depthwise 2D convolution to the input tensor.
 
@@ -21,11 +21,15 @@ class Model(nn.Module):
             stride (int or tuple, optional): Stride of the convolution. Default: 1.
             padding (int or tuple, optional): Zero-padding added to both sides of the input. Default: 0.
             bias (bool, optional): If True, adds a learnable bias to the output. Default: True.
+            seed (int, optional): RNG seed for deterministic conv weight init. Required so
+                ref Model.forward and candidate ModelNew.forward produce IDENTICAL random
+                weights when invoked back-to-back inside one verification case. Default: 0.
 
         Returns:
             torch.Tensor: Output tensor of shape (batch, in_channels, height, width) after performing depthwise nn.Conv2d. Depthwise convolution processes each input channel independently, so output channels equal input channels.
         """
-        conv = nn.Conv2d(in_channels, in_channels, kernel_size=(kernel_size, kernel_size), stride=stride, padding=padding, groups=in_channels, bias=bias)
+        torch.manual_seed(seed)
+        conv = nn.Conv2d(in_channels, in_channels, kernel_size=(kernel_size, kernel_size), stride=stride, padding=padding, groups=in_channels, bias=bias).to(x.device)
         return conv(x)
 
 
@@ -55,8 +59,9 @@ def get_input_groups():
         stride = attr_inputs.get("stride", 1)
         padding = attr_inputs.get("padding", 0)
         bias = attr_inputs.get("bias", True)
-        
-        input_groups.append([x, in_channels, kernel_size, stride, padding, bias])
+        seed = attr_inputs.get("seed", 0)
+
+        input_groups.append([x, in_channels, kernel_size, stride, padding, bias, seed])
     return input_groups
 
 

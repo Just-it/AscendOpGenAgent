@@ -10,7 +10,7 @@ class Model(nn.Module):
     def __init__(self):
         super(Model, self).__init__()
     
-    def forward(self, x: torch.Tensor, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True, seed=0) -> torch.Tensor:
         """
         Applies standard 1D convolution to the input tensor.
 
@@ -24,11 +24,17 @@ class Model(nn.Module):
             dilation (int or tuple, optional): Spacing between kernel elements. Default: 1.
             groups (int, optional): Number of blocked connections from input channels to output channels. Default: 1.
             bias (bool, optional): If True, adds a learnable bias to the output. Default: True.
+            seed (int, optional): RNG seed used to initialize conv weights deterministically.
+                Required so that ref Model.forward and candidate ModelNew.forward produce
+                IDENTICAL random weights when the verification harness invokes both
+                back-to-back inside one test case. Without this, RNG advances between the
+                two calls and ref ≠ cand by construction. Default: 0.
 
         Returns:
             torch.Tensor: Output tensor after performing nn.Conv1d.
         """
-        conv = nn.Conv1d(in_channels, out_channels, kernel_size, stride=stride, padding=padding, dilation=dilation, groups=groups, bias=bias)
+        torch.manual_seed(seed)
+        conv = nn.Conv1d(in_channels, out_channels, kernel_size, stride=stride, padding=padding, dilation=dilation, groups=groups, bias=bias).to(x.device)
         return conv(x)
 
 
@@ -61,8 +67,9 @@ def get_input_groups():
         dilation = attr_inputs.get("dilation", 1)
         groups = attr_inputs.get("groups", 1)
         bias = attr_inputs.get("bias", True)
-        
-        input_groups.append([x, in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias])
+        seed = attr_inputs.get("seed", 0)
+
+        input_groups.append([x, in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias, seed])
     return input_groups
 
 

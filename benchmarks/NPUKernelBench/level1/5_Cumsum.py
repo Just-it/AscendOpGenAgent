@@ -47,7 +47,7 @@ def get_input_groups():
         }
         dtype = dtype_map[x_info["dtype"]]
         
-        x = torch.randn(x_info["shape"], dtype=dtype)
+        x = torch.distributions.Uniform(0.0, 1.0).sample(x_info["shape"]).to(dtype)
         dim = dim_info["value"]
         input_groups.append([x, dim])
     return input_groups

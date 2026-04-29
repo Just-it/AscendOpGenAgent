@@ -40,7 +40,8 @@ at::Tensor run_interpolate(
     const at::Tensor &w_w,          // [W_out, K_w] fp32
     int64_t NC, int64_t H_in, int64_t W_in,
     int64_t H_out, int64_t W_out,
-    int64_t K_h, int64_t K_w)
+    int64_t K_h, int64_t K_w,
+    int64_t bicubic_in_kernel)
 {
     TORCH_CHECK(xFlat.dim() == 3, "xFlat must be [NC, H_in, W_in]");
     TORCH_CHECK(xFlat.is_contiguous(), "xFlat must be contiguous");
@@ -85,7 +86,7 @@ at::Tensor run_interpolate(
     t->usedCoreNum = usedCoreNum;
     t->tasksPerCore= tasksPerCore;
     t->totalTasks  = totalTasks;
-    t->reserved0   = 0;
+    t->bicubic_in_kernel = static_cast<int32_t>(bicubic_in_kernel);
 
     auto tilingNpu = tilingCpu.to(at::kPrivateUse1);
     auto aclStream = c10_npu::getCurrentNPUStream().stream(false);

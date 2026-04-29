@@ -1,6 +1,17 @@
 #ifndef INTERPOLATE_UNIFIED_KERNEL_H
 #define INTERPOLATE_UNIFIED_KERNEL_H
 
+// Round 4 / Lesson 4 avoidance:
+//   - Don't compute the row_mix intermediate (separable in H first).  In fp32
+//     the cubic kernel weights have pattern [-,+,+,-] which causes catastrophic
+//     cancellation inside row_mix; that ulp-level error is then amplified by
+//     the second-stage W-axis 4-tap sum.
+//   - Instead: per output (nc, h_out, w_out), directly iterate the K_h*K_w
+//     pairs and Kahan-compensated-sum all 16 weighted terms in one go.
+//     With 16 terms (vs separable's 4+4), Kahan actually pays off:
+//     accumulated error drops to ~ eps^2 * sum(|term|) which is well below
+//     the fp32 ulp at the output magnitude.
+
 #include "kernel_operator.h"
 #include "interpolate_tiling.h"
 
@@ -24,7 +35,6 @@ public:
         tiling_.usedCoreNum = tilingPtr->usedCoreNum;
         tiling_.tasksPerCore= tilingPtr->tasksPerCore;
         tiling_.totalTasks  = tilingPtr->totalTasks;
-
         pipe_ = pipe;
 
         const int32_t NC    = tiling_.NC;
@@ -48,23 +58,21 @@ public:
         wWGm_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(w_w),
                               static_cast<uint64_t>(W_out) * K_w);
 
-        // Pad to 32 elements for safe vector ops.
         W_in_pad_   = (W_in  + 31) & ~31;
         W_out_pad_  = (W_out + 31) & ~31;
         const int32_t H_out_K_h_pad = (H_out * K_h + 31) & ~31;
         const int32_t W_out_K_w_pad = (W_out * K_w + 31) & ~31;
 
+        // K_h cached fp32 source rows (we keep them all so direct 16-tap can
+        // gather without re-reading GM per output).
         pipe_->InitBuffer(xRowBuf_,
             static_cast<uint32_t>(W_in_pad_) * sizeof(T_IN));
-        pipe_->InitBuffer(rowFp32Buf_,
-            static_cast<uint32_t>(W_in_pad_) * sizeof(float));
-        pipe_->InitBuffer(rowMixBuf_,
-            static_cast<uint32_t>(W_in_pad_) * sizeof(float));
+        pipe_->InitBuffer(xRowFp32Buf_,
+            static_cast<uint32_t>(INTERP_K_MAX) * W_in_pad_ * sizeof(float));
         pipe_->InitBuffer(yAccBuf_,
             static_cast<uint32_t>(W_out_pad_) * sizeof(float));
         pipe_->InitBuffer(yRowOutBuf_,
             static_cast<uint32_t>(W_out_pad_) * sizeof(T_IN));
-
         pipe_->InitBuffer(hIdxBuf_,
             static_cast<uint32_t>(H_out_K_h_pad) * sizeof(int32_t));
         pipe_->InitBuffer(wIdxBuf_,
@@ -75,8 +83,7 @@ public:
             static_cast<uint32_t>(W_out_K_w_pad) * sizeof(float));
 
         xRow_      = xRowBuf_.Get<T_IN>();
-        rowFp32_   = rowFp32Buf_.Get<float>();
-        rowMix_    = rowMixBuf_.Get<float>();
+        xRowFp32_  = xRowFp32Buf_.Get<float>();
         yAcc_      = yAccBuf_.Get<float>();
         hIdxLocal_ = hIdxBuf_.Get<int32_t>();
         wIdxLocal_ = wIdxBuf_.Get<int32_t>();
@@ -133,6 +140,36 @@ private:
         AscendC::PipeBarrier<PIPE_ALL>();
     }
 
+    __aicore__ inline float CubicKernelNpuFp32(float t_signed) {
+        // Mirrors PyTorch's cubic_convolution1/2 with A=-0.75, but every
+        // intermediate stays in NPU fp32 — same rounding pipeline as the
+        // PyTorch NPU reference path.
+        const float A = -0.75f;
+        float t = t_signed >= 0.0f ? t_signed : -t_signed;
+        if (t <= 1.0f) {
+            // ((A+2)*t - (A+3)) * t * t + 1
+            float ap2 = A + 2.0f;
+            float ap3 = A + 3.0f;
+            float s1  = ap2 * t - ap3;
+            float s2  = s1 * t;
+            float s3  = s2 * t;
+            return s3 + 1.0f;
+        }
+        if (t < 2.0f) {
+            // ((A*t - 5*A) * t + 8*A) * t - 4*A
+            float ax  = A * t;
+            float m5a = 5.0f * A;
+            float sub = ax - m5a;
+            float s1  = sub * t;
+            float a8  = 8.0f * A;
+            float s2  = s1 + a8;
+            float s3  = s2 * t;
+            float a4  = 4.0f * A;
+            return s3 - a4;
+        }
+        return 0.0f;
+    }
+
     __aicore__ inline void ProcessOne(int32_t nc, int32_t h_out)
     {
         const int32_t H_in  = tiling_.H_in;
@@ -140,17 +177,18 @@ private:
         const int32_t W_out = tiling_.W_out;
         const int32_t K_h   = tiling_.K_h;
         const int32_t K_w   = tiling_.K_w;
+        const bool bic_kern = (tiling_.bicubic_in_kernel != 0);
 
-        // ---- Phase 1: rowMix = sum_kh(h_w[h_out,kh] * X[nc, h_idx[h_out,kh], :])
-        AscendC::Duplicate(rowMix_, 0.0f, W_in_pad_);
-        AscendC::PipeBarrier<PIPE_V>();
+        // For bicubic-in-kernel, reuse the first slot of h_w / w_w to pass t.
+        // Indices h_idx still come from host (clamping requires per-element
+        // boundary knowledge that's cleaner to do once on host).
+        // For other modes, h_w / w_w are full K_h / K_w precomputed weights.
 
+        // ---- Load K_h source rows (X[nc, h_idx[h_out, kh], :]) into UB.
         for (int32_t kh = 0; kh < K_h; ++kh) {
             int32_t hi = hIdxLocal_.GetValue(h_out * K_h + kh);
             if (hi < 0) hi = 0;
             if (hi > H_in - 1) hi = H_in - 1;
-            const float wh = hWLocal_.GetValue(h_out * K_h + kh);
-
             uint64_t srcOffset = (static_cast<uint64_t>(nc) * H_in + hi) * W_in;
             AscendC::DataCopyExtParams cp{
                 1, static_cast<uint32_t>(W_in * sizeof(T_IN)), 0, 0, 0};
@@ -159,47 +197,50 @@ private:
             AscendC::DataCopyPad(xRow_, xGm_[srcOffset], cp, cpPad);
             AscendC::PipeBarrier<PIPE_ALL>();
 
-            // Cast / copy to fp32.
+            AscendC::LocalTensor<float> dstK = xRowFp32_[kh * W_in_pad_];
             if constexpr (std::is_same_v<T_IN, float>) {
-                AscendC::DataCopy(rowFp32_, xRow_, W_in_pad_);
+                AscendC::DataCopy(dstK, xRow_, W_in_pad_);
             } else {
-                AscendC::Cast(rowFp32_, xRow_, AscendC::RoundMode::CAST_NONE,
+                AscendC::Cast(dstK, xRow_, AscendC::RoundMode::CAST_NONE,
                               W_in_pad_);
             }
             AscendC::PipeBarrier<PIPE_V>();
-
-            if (wh != 0.0f) {
-                // Fused multiply-add: rowMix += wh * rowFp32 (one rounding step).
-                AscendC::Axpy(rowMix_, rowFp32_, wh, W_in_pad_);
-                AscendC::PipeBarrier<PIPE_V>();
-            }
         }
-
-        // ---- Phase 2: Y[w_out] = sum_kw(w_w[w_out,kw] * rowMix[w_idx[w_out,kw]])
-        AscendC::Duplicate(yAcc_, 0.0f, W_out_pad_);
         AscendC::PipeBarrier<PIPE_ALL>();
 
-        // Pairwise tree reduction over K_w-tap (avoids Lesson #1, #2:
-        // sequential / Kahan didn't match PyTorch NPU bicubic; try fixed
-        // pairwise order ((t0+t1)+(t2+t3)) at K_w<=4).
+        // ---- Direct 16-tap weighted sum with Kahan compensation per output.
+        // Reverted to host-side precomputed weights (Round 5 best result was
+        // 71/73 with host fp32-step-by-step weights; kernel-side bicubic
+        // broke other cases catastrophically).
         for (int32_t w_out = 0; w_out < W_out; ++w_out) {
-            float t[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-            for (int32_t kw = 0; kw < K_w; ++kw) {
-                const float ww = wWLocal_.GetValue(w_out * K_w + kw);
-                if (ww == 0.0f) continue;
-                int32_t wi = wIdxLocal_.GetValue(w_out * K_w + kw);
-                if (wi < 0) wi = 0;
-                if (wi > W_in - 1) wi = W_in - 1;
-                t[kw] = ww * rowMix_.GetValue(wi);
+            // Best-known ordering (Round 7): kh-outer kw-inner, mul order
+            // (input * wh) * ww + 16-tap Kahan compensated sum.
+            float acc  = 0.0f;
+            float comp = 0.0f;
+            for (int32_t kh = 0; kh < K_h; ++kh) {
+                const float wh = hWLocal_.GetValue(h_out * K_h + kh);
+                if (wh == 0.0f) continue;
+                AscendC::LocalTensor<float> rowK = xRowFp32_[kh * W_in_pad_];
+                for (int32_t kw = 0; kw < K_w; ++kw) {
+                    const float ww = wWLocal_.GetValue(w_out * K_w + kw);
+                    if (ww == 0.0f) continue;
+                    int32_t wi = wIdxLocal_.GetValue(w_out * K_w + kw);
+                    if (wi < 0) wi = 0;
+                    if (wi > W_in - 1) wi = W_in - 1;
+                    const float input_val = rowK.GetValue(wi);
+                    const float partial   = input_val * wh;
+                    const float term      = partial * ww;
+                    const float y = term - comp;
+                    const float t = acc + y;
+                    comp = (t - acc) - y;
+                    acc = t;
+                }
             }
-            // Pairwise: ((t0+t1) + (t2+t3))
-            const float p01 = t[0] + t[1];
-            const float p23 = t[2] + t[3];
-            yAcc_.SetValue(w_out, p01 + p23);
+            yAcc_.SetValue(w_out, acc);
         }
         AscendC::PipeBarrier<PIPE_ALL>();
 
-        // ---- Phase 3: Cast & store ----
+        // ---- Cast & store.
         AscendC::LocalTensor<T_IN> yOut = yRowOutBuf_.Get<T_IN>();
         if constexpr (std::is_same_v<T_IN, float>) {
             AscendC::DataCopy(yOut, yAcc_, W_out_pad_);
@@ -232,8 +273,7 @@ private:
     AscendC::GlobalTensor<float>   wWGm_;
 
     AscendC::TBuf<AscendC::TPosition::VECCALC> xRowBuf_;
-    AscendC::TBuf<AscendC::TPosition::VECCALC> rowFp32Buf_;
-    AscendC::TBuf<AscendC::TPosition::VECCALC> rowMixBuf_;
+    AscendC::TBuf<AscendC::TPosition::VECCALC> xRowFp32Buf_;
     AscendC::TBuf<AscendC::TPosition::VECCALC> yAccBuf_;
     AscendC::TBuf<AscendC::TPosition::VECCALC> yRowOutBuf_;
     AscendC::TBuf<AscendC::TPosition::VECCALC> hIdxBuf_;
@@ -242,8 +282,7 @@ private:
     AscendC::TBuf<AscendC::TPosition::VECCALC> wWBuf_;
 
     AscendC::LocalTensor<T_IN>    xRow_;
-    AscendC::LocalTensor<float>   rowFp32_;
-    AscendC::LocalTensor<float>   rowMix_;
+    AscendC::LocalTensor<float>   xRowFp32_;
     AscendC::LocalTensor<float>   yAcc_;
     AscendC::LocalTensor<int32_t> hIdxLocal_;
     AscendC::LocalTensor<int32_t> wIdxLocal_;

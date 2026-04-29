@@ -1,0 +1,84 @@
+{
+  "op": "28_Interpolate",
+  "output_dir": "/root/wangyx/runs/28_Interpolate",
+  "json_path": "/root/wangyx/runs/28_Interpolate/28_Interpolate.json",
+  "device": "npu",
+  "warmup": 5,
+  "repeats": 50,
+  "seed": 0,
+  "reference": {
+    "model_path": "/root/wangyx/runs/28_Interpolate/model.py",
+    "case_results": [],
+    "ok": false,
+    "error": "ValueError: only one of size or scale_factor should be defined"
+  },
+  "ascendc": {
+    "model_path": "/root/wangyx/runs/28_Interpolate/model_new_ascendc.py",
+    "case_results": [
+      {
+        "index": 0,
+        "latency_ms": 4.1528,
+        "peak_memory_mb": 6.76,
+        "operators": {}
+      },
+      {
+        "index": 1,
+        "latency_ms": 2.978,
+        "peak_memory_mb": 10.13,
+        "operators": {}
+      },
+      {
+        "index": 2,
+        "latency_ms": 0.5923,
+        "peak_memory_mb": 22.75,
+        "operators": {}
+      },
+      {
+        "index": 3,
+        "latency_ms": 22.6353,
+        "peak_memory_mb": 95.65,
+        "operators": {}
+      },
+      {
+        "index": 4,
+        "latency_ms": 0.5823,
+        "peak_memory_mb": 95.65,
+        "operators": {}
+      },
+      {
+        "index": 5,
+        "latency_ms": 4.3519,
+        "peak_memory_mb": 95.65,
+        "operators": {}
+      },
+      {
+        "index": 6,
+        "latency_ms": 4.2335,
+        "peak_memory_mb": 95.65,
+        "operators": {}
+      },
+      {
+        "index": 7,
+        "latency_ms": 4.1341,
+        "peak_memory_mb": 95.65,
+        "operators": {}
+      },
+      {
+        "index": 8,
+        "latency_ms": 10.1408,
+        "peak_memory_mb": 95.65,
+        "operators": {}
+      },
+      {
+        "index": 9,
+        "latency_ms": 0.6115,
+        "peak_memory_mb": 95.65,
+        "operators": {}
+      }
+    ],
+    "ok": true,
+    "error": ""
+  },
+  "per_case_speedup": [],
+  "overall_speedup": null
+}

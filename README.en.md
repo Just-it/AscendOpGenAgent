@@ -536,7 +536,7 @@ def get_init_inputs():
 | `framework.peak_memory_mb` | `float` | PyTorch peak memory (MB), average across all Shapes |
 | `implementation.avg_latency_ms` | `float` | Implementation average latency (ms), average across all Shapes |
 | `implementation.peak_memory_mb` | `float` | Implementation peak memory (MB), average across all Shapes |
-| `speedup_vs_torch` | `float` | Speedup over PyTorch (average of all Shape speedups) |
+| `speedup_vs_torch` | `float\|null` | Geometric mean speedup `(∏ s_i)^(1/n)` over PyTorch (across pass shapes with finite positive `s_i`); `null` when all shapes are abnormal |
 | `perf_method` | `str` | Profiling method: "profiler" (torch_npu.profiler) or "fallback" (time.perf_counter) |
 | `skill_path` | `str` | Path to the benchmark skill used |
 | `per_shape_results` | `List[Dict]` | Multi-Shape details (present when `total_cases > 1`) |

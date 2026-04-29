@@ -218,6 +218,24 @@ class Model(nn.Module):
     def __init__(self):
         super(Model, self).__init__()
 
+    def postprocess_output(self, output, inputs):
+        """
+        KV RMSNorm RoPE Cache 专用输出裁剪
+        规则：Norm模式 或 is_output_kv=False → 只校验前两个输出
+        """
+        # 输入顺序与 forward 完全一致
+        # kv, gamma, cos, sin, index, k_cache, ckv_cache,
+        # k_rope_scale, c_kv_scale, k_rope_offset, c_kv_offset,
+        # epsilon, cache_mode, is_output_kv
+        if len(inputs) >= 14:
+            cache_mode = inputs[12]
+            is_output_kv = inputs[13]
+
+            if cache_mode == 'Norm' or not is_output_kv:
+                return output[:2]
+
+        return output
+
     def forward(self, kv: torch.Tensor, gamma: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor,
                 index: torch.Tensor, k_cache: torch.Tensor, ckv_cache: torch.Tensor,
                 k_rope_scale: torch.Tensor = None, c_kv_scale: torch.Tensor = None,
@@ -300,24 +318,34 @@ def get_input_groups():
                     attrs[inp['name']] = inp['value']
 
             # Generate valid index values based on cache_mode and cache shapes
+            index = tensors.get('index')
             cache_mode = attrs.get('cache_mode', 'Norm')
-            index_shape = tensors['index'].shape
-            if cache_mode == 'Norm':
-                # index shape [batch_size, seq_len], values < cache_length (k_cache shape[2])
-                cache_length = tensors['k_cache'].shape[2]
-                bs = tensors['kv'].shape[0]
-                seq_len = tensors['kv'].shape[2]
-                idx = torch.arange(seq_len).unsqueeze(0).expand(bs, -1)
-                if index_shape == (bs * seq_len,):
-                    idx = idx.reshape(-1)
-                tensors['index'] = idx.to(torch.int64)
-            else:
-                # PA modes: index shape [batch_size * seq_len], values < block_num * block_size
-                total_elements = tensors['k_cache'].shape[0] * tensors['k_cache'].shape[1]
-                tensors['index'] = torch.arange(min(index_shape[0] if len(index_shape) > 0 else 1, total_elements), dtype=torch.int64)
-                if tensors['index'].numel() < (index_shape[0] if len(index_shape) > 0 else 1):
-                    tensors['index'] = torch.randint(0, total_elements, index_shape, dtype=torch.int64)
+            k_cache = tensors.get('k_cache')
 
+            if index is not None and k_cache is not None:
+                device = index.device
+                if cache_mode == 'Norm':
+                    # Norm：全局唯一索引 mod 最大序列长度，避免重复
+                    max_seq = k_cache.shape[2]
+                    if index.dim() == 2:
+                        B, S = index.shape
+                        total = B * S
+                        index = (torch.arange(total, dtype=torch.int64, device=device) % max_seq).reshape(B, S)
+                    else:
+                        total = index.numel()
+                        index = (torch.arange(total, dtype=torch.int64, device=device) % max_seq).reshape(index.shape)
+
+                elif cache_mode in ('PA', 'PA_BNSD', 'PA_NZ'):
+                    # PA 系列：直接生成连续唯一索引
+                    index = torch.arange(index.numel(), dtype=torch.int64, device=device)
+
+                elif cache_mode in ('PA_BLK_BNSD', 'PA_BLK_NZ'):
+                    # 分块 PA：索引 = 连续序号 × block_size
+                    block_size = k_cache.shape[1]
+                    length = index.numel()
+                    index = torch.arange(length, dtype=torch.int64, device=device) * block_size
+
+                tensors['index'] = index
             group = [
                 tensors['kv'], tensors['gamma'], tensors['cos'], tensors['sin'],
                 tensors['index'], tensors['k_cache'], tensors['ckv_cache'],

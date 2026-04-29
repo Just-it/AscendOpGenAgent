@@ -203,7 +203,7 @@ if [[ "$USE_PARALLEL" == true ]]; then
                     # 动态计算当前项目的 Claude 思维轨迹目录
                     CWD=$(pwd)
                     CLAUDE_PROJECT_NAME=$(echo "$CWD" | sed 's|/|-|g')
-                    CLAUDE_PROJECT_DIR="$HOME/.claude/projects/$CLAUDE_PROJECT_NAME"
+                    CLAUDE_PROJECT_DIR="/root/.claude/projects/$CLAUDE_PROJECT_NAME"
 
                     PROMPT="使用当前agent生成ascendC算子，npu=${npu}，算子描述文件为 ${file}，输出到 ${TARGET_OP_DIR}/"
 
@@ -243,7 +243,10 @@ if [[ "$USE_PARALLEL" == true ]]; then
                     # 串行重命名思维轨迹文件（带时间戳防止同名覆盖）
                     {
                         flock -x 201
-                        LATEST_JSONL=$(ls -t "$CLAUDE_PROJECT_DIR"/*.jsonl 2>/dev/null | head -1)
+                        LATEST_JSONL=""
+                        if [[ -d "$CLAUDE_PROJECT_DIR" ]]; then
+                            LATEST_JSONL=$(ls -t "$CLAUDE_PROJECT_DIR"/*.jsonl 2>/dev/null | head -1 || true)
+                        fi
                         if [[ -n "$LATEST_JSONL" && -f "$LATEST_JSONL" ]]; then
                             BASENAME=$(basename "$LATEST_JSONL" .jsonl)
                             TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -296,7 +299,7 @@ else
         # 动态计算当前项目的 Claude 思维轨迹目录
         CWD=$(pwd)
         CLAUDE_PROJECT_NAME=$(echo "$CWD" | sed 's|/|-|g')
-        CLAUDE_PROJECT_DIR="$HOME/.claude/projects/$CLAUDE_PROJECT_NAME"
+        CLAUDE_PROJECT_DIR="/root/.claude/projects/$CLAUDE_PROJECT_NAME"
 
         PROMPT="使用当前agent生成ascendC算子，npu=${NPU_ID}，算子描述文件为 ${file}，输出到 ${TARGET_OP_DIR}/"
 
@@ -318,7 +321,10 @@ else
         fi
 
         # 重命名思维轨迹文件（带时间戳防止同名覆盖）
-        LATEST_JSONL=$(ls -t "$CLAUDE_PROJECT_DIR"/*.jsonl 2>/dev/null | head -1)
+        LATEST_JSONL=""
+        if [[ -d "$CLAUDE_PROJECT_DIR" ]]; then
+            LATEST_JSONL=$(ls -t "$CLAUDE_PROJECT_DIR"/*.jsonl 2>/dev/null | head -1 || true)
+        fi
         if [[ -n "$LATEST_JSONL" && -f "$LATEST_JSONL" ]]; then
             BASENAME=$(basename "$LATEST_JSONL" .jsonl)
             TIMESTAMP=$(date +%Y%m%d_%H%M%S)

@@ -62,16 +62,59 @@ def cleanup_npu_memory():
 
 
 def get_limit(data_type):
-    """根据数据类型获取精度阈值"""
+    """根据数据类型获取精度阈值 - 使用 2 的幂次方阈值（与 NPU Benchmark 标准一致）
+
+    参考文档: 精度对比方法.md
+    数据类型: FLOAT16, BFLOAT16, FLOAT32, HiFloat32, FLOAT8 E4M3, FLOAT8 E5M2
+    判定标准: MERE < threshold 且 MARE < 10 * threshold
+
+    阈值表:
+    | 数据类型      | 阈值 (2^n)      | 十进制值       |
+    |--------------|----------------|---------------|
+    | FLOAT16      | 2^{-10}        | 0.0009765625  |
+    | BFLOAT16     | 2^{-7}         | 0.0078125     |
+    | FLOAT32      | 2^{-13}        | 0.0001220703  |
+    | HiFloat32    | 2^{-11}        | 0.0004882812  |
+    | FLOAT8 E4M3  | 2^{-3}         | 0.125         |
+    | FLOAT8 E5M2  | 2^{-2}         | 0.25          |
+
+    由于 torch.dtype 中没有直接定义 HiFloat32，可通过字符串传入 "hifloat32" 获取对应阈值。
+    """  # noqa: E501
     import torch
-    if data_type == torch.float16:
-        return 0.004
-    elif data_type == torch.bfloat16:
-        return 0.03
-    elif data_type == torch.int8:
-        return 0.01
-    else:
-        return 0.02
+
+    # 支持字符串类型（用于 HiFloat32 或其他自定义类型）
+    if isinstance(data_type, str):
+        str_to_threshold = {
+            "float16": 2**(-10),
+            "bfloat16": 2**(-7),
+            "float32": 2**(-13),
+            "hifloat32": 2**(-11),
+            "float8_e4m3": 2**(-3),
+            "float8_e5m2": 2**(-2),
+            "fp8_e4m3": 2**(-3),
+            "fp8_e5m2": 2**(-2),
+        }
+        return str_to_threshold.get(data_type.lower(), 2**(-13))
+
+    # torch.dtype 类型映射
+    dtype_threshold_map = {
+        torch.float16: 2**(-10),    # FLOAT16
+        torch.bfloat16: 2**(-7),    # BFLOAT16
+        torch.float32: 2**(-13),    # FLOAT32
+    }
+
+    # 安全获取 FP8 类型（PyTorch 2.0+ 支持）
+    # FLOAT8 E4M3: 2^{-3}
+    float8_e4m3 = getattr(torch, 'float8_e4m3fn', None) or getattr(torch, 'float8_e4m3', None)
+    if float8_e4m3 is not None:
+        dtype_threshold_map[float8_e4m3] = 2**(-3)
+
+    # FLOAT8 E5M2: 2^{-2}
+    float8_e5m2 = getattr(torch, 'float8_e5m2fn', None) or getattr(torch, 'float8_e5m2', None)
+    if float8_e5m2 is not None:
+        dtype_threshold_map[float8_e5m2] = 2**(-2)
+
+    return dtype_threshold_map.get(data_type, 2**(-13))
 
 
 def resolve_input_provider(torch_module):
@@ -87,7 +130,7 @@ def resolve_input_provider(torch_module):
         )
 
 
-def compare(fw_out, impl_out, limit, data_type):
+def compare(fw_out, impl_out, data_type):
     """对比框架输出和实现输出"""
     import torch
     fw_flat = fw_out.flatten().detach().cpu()
@@ -147,34 +190,66 @@ def compare(fw_out, impl_out, limit, data_type):
     if impl_finite.dtype != fw_finite.dtype:
         impl_finite = impl_finite.to(fw_finite.dtype)
 
-    abs_diff = torch.abs(fw_finite.float() - impl_finite.float())
-    abs_ref = torch.abs(fw_finite.float())
-    eps = 1e-8
-    relative_error = torch.where(abs_ref > eps, abs_diff / abs_ref, abs_diff)
+    # 执行 NPU Benchmark 精度验证
+    _check_accuracy_npu_benchmark(fw_finite, impl_finite, data_type)
 
-    err_cnt = (relative_error > limit).sum().item()
-    limit_cnt = int(finite_count * limit)
 
-    if err_cnt > limit_cnt:
-        max_error = relative_error.max().item()
-        mean_error = relative_error.mean().item()
-        mismatch_mask = relative_error > limit
+def _check_accuracy_npu_benchmark(golden, actual, data_type):
+    """执行 NPU Benchmark 精度验证。
+
+    根据精度对比方法文档，验证两个张量的数值一致性：
+    - 计算 MERE（平均相对误差）和 MARE（最大相对误差）
+    - 使用 2 的幂次方作为阈值
+    - 判定标准：MERE < threshold 且 MARE < 10 * threshold
+
+    Args:
+        golden: 参考输出（金标准）
+        actual: 被测实现输出
+        data_type: 数据类型，用于获取对应的阈值
+
+    Raises:
+        AssertionError: 当精度验证未通过时
+    """
+    import torch
+
+    # 统一转换为 float32 进行计算
+    golden_f = golden.float()
+    actual_f = actual.float()
+
+    # 计算相对误差，使用 1e-7 保护分母避免除零
+    diff = (actual_f - golden_f).abs()
+    eps = 1e-7  # 与 NPU Benchmark 标准一致的分母保护值
+    relative_error = diff / (golden_f.abs() + eps)
+
+    # 计算误差指标
+    MERE = relative_error.mean().item()  # 平均相对误差
+    MARE = relative_error.max().item()   # 最大相对误差
+
+    # 获取数据类型对应的阈值（2 的幂次方）
+    threshold = get_limit(data_type)
+
+    # 判定标准：MERE < t 且 MARE < 10t
+    is_pass = (MERE < threshold) and (MARE < 10 * threshold)
+
+    if not is_pass:
+        # 收集错误信息
+        mismatch_mask = relative_error > threshold
         mismatch_indices = torch.where(mismatch_mask)[0]
         num_to_show = min(10, len(mismatch_indices))
 
         error_msg = (
-            f"验证失败，输出不一致(误差数/最大容忍误差数): "
-            f"err_cnt={err_cnt} / {limit_cnt}, dtype={data_type}, limit={limit}\n"
+            f"验证失败，输出不一致: MERE={MERE:.6e}, MARE={MARE:.6e}, "
+            f"dtype={data_type}, threshold={threshold}\n"
         )
-        error_msg += f"最大相对误差: {max_error:.6e}, 平均相对误差: {mean_error:.6e}\n"
-        error_msg += f"前 {num_to_show} 个不一致的值:\n"
-        for i in range(num_to_show):
-            idx = mismatch_indices[i].item()
-            error_msg += (
-                f"  位置[{idx}]: framework={fw_finite[idx]:.6e}, "
-                f"impl={impl_finite[idx]:.6e}, "
-                f"相对误差={relative_error[idx]:.6e}\n"
-            )
+        if len(mismatch_indices) > 0:
+            error_msg += f"前 {num_to_show} 个超出阈值的值:\n"
+            for i in range(num_to_show):
+                idx = mismatch_indices[i].item()
+                error_msg += (
+                    f"  位置[{idx}]: framework={golden[idx]:.6e}, "
+                    f"impl={actual[idx]:.6e}, "
+                    f"相对误差={relative_error[idx]:.6e}\n"
+                )
         raise AssertionError(error_msg)
 
 
@@ -224,8 +299,7 @@ def run_single_case(
         if isinstance(fw_out, torch.Tensor) and isinstance(impl_out, torch.Tensor):
             try:
                 data_type = fw_out.dtype
-                limit = get_limit(data_type)
-                compare(fw_out, impl_out, limit, data_type)
+                compare(fw_out, impl_out, data_type)
             except AssertionError as e:
                 raise AssertionError(f"[用例 {case_idx}/{total_cases}] {str(e)}") from e
 

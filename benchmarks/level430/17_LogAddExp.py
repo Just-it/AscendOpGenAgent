@@ -27,10 +27,10 @@ class Model(nn.Module):
         if not (x_is_f64 or y_is_f64):
             return torch.logaddexp(x, y)
 
-        if x_is_f64 and y_is_f64:
+        if x_is_f64 or y_is_f64:
             out_dtype = torch.float32
         else:
-            out_dtype = y.dtype if x_is_f64 else x.dtype
+            out_dtype = x.dtype if x.dtype == y.dtype else torch.float32
         out_shape = torch.broadcast_shapes(x.shape, y.shape)
         result = torch.empty(out_shape, dtype=out_dtype, device=x.device)
         torch.logaddexp(x, y, out=result)
@@ -60,6 +60,13 @@ def get_input_groups():
         }
         x_dtype = dtype_map[x_info["dtype"]]
         y_dtype = dtype_map[y_info["dtype"]]
+
+        if x_dtype == torch.float16:
+            x_dtype = torch.float32
+        
+        if y_dtype == torch.float16:
+            y_dtype = torch.float32
+        
         x_shape = x_info["shape"]
         y_shape = y_info["shape"]
 

@@ -17,10 +17,10 @@ argument-hint: >
 
 当前 benchmark 结构下，测试用例存储在 `.json` 文件中（与 `model.py` 配套），并应在 Phase 1 被复制到 `{output_dir}/` 目录中。按以下优先级确定要处理的 `.json` 文件：
 
-1. 读取 `{output_dir}/model.py`，分析 `get_input_groups()` 函数中引用的 `.json` 文件名（例如 `os.path.join(os.path.dirname(__file__), "xxx.json")`），据此在 `{output_dir}` 内确定目标 `.json` 文件。
-2. 如果 `model.py` 中没有显式引用，则直接查找 `{output_dir}` 目录下唯一的一个 `.json` 文件作为目标。
+1. 读取 `{output_dir}/model.py`，分析 `get_input_groups()` 函数中引用的 `.json` 文件名（例如 `os.path.join(os.path.dirname(__file__), "xxx.json")`），据此在 `{output_dir}` 内确定目标 `.json` 文件。由于 `model.py` 的 `__file__` 解析为 `model.py`，`get_input_groups()` 通常查找的是 `model.json`，因此目标文件为 `{output_dir}/model.json`。
+2. 如果 `model.py` 中没有显式引用，则直接查找 `{output_dir}` 目录下因 Phase 1 复制而存在的 `.json` 文件（排除 `.json.bak`）作为目标。
 
-如果找不到唯一的 `.json` 文件，报错并停止。
+优先使用 `{output_dir}/model.json`（`model.py` 按 `__file__` 查找同名 `.json`），同时保留 `<op_name>.json` 作为原始备份。如果找不到有效的 `.json` 文件，报错并停止。
 
 ## 关键限制
 - 只允许修改确定的目标 `.json` 文件，不要修改 `{output_dir}/model.py` 中的任何内容。
@@ -28,7 +28,7 @@ argument-hint: >
 - 只允许读取当前工作区目录结构内的文件与子目录；禁止读取当前工作区之外的任何路径。
 
 ## 前置操作
-在精简前，务必将目标 `.json` 文件备份为同名的 `.json.bak`（例如 `31_IOU.json.bak`），以便后续全量验证时恢复。
+在精简前，务必将目标 `.json` 文件备份为同名的 `.json.bak`（例如 `model.json.bak`），以便后续全量验证时恢复。如果 `<op_name>.json` 是独立文件（非 `model.json`），也需一并备份。
 
 ## 精简原则
 

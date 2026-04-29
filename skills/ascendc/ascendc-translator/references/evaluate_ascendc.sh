@@ -95,13 +95,20 @@ if [[ ! -f "${WORKDIR}/utils/build_ascendc.py" ]]; then
   exit 1
 fi
 
-if [[ ! -d "${WORKDIR}/${TASK}" ]]; then
-  echo "Task directory not found: ${WORKDIR}/${TASK}" >&2
+# Support both relative and absolute paths for TASK
+if [[ "${TASK}" == /* ]]; then
+  TASK_DIR="${TASK}"
+else
+  TASK_DIR="${WORKDIR}/${TASK}"
+fi
+
+if [[ ! -d "${TASK_DIR}" ]]; then
+  echo "Task directory not found: ${TASK_DIR}" >&2
   exit 1
 fi
 
-if [[ ! -d "${WORKDIR}/${TASK}/kernel" ]]; then
-  echo "Task kernel directory not found: ${WORKDIR}/${TASK}/kernel" >&2
+if [[ ! -d "${TASK_DIR}/kernel" ]]; then
+  echo "Task kernel directory not found: ${TASK_DIR}/kernel" >&2
   exit 1
 fi
 
@@ -110,14 +117,14 @@ if python -c 'import torch; import torch_npu' >/dev/null 2>&1; then
   cd "${WORKDIR}"
   if [[ "${ASCENDC_CLEAN_BUILD}" == "1" ]]; then
     PYTHONPATH="${PYTHONPATH_PREFIX}${PYTHONPATH:+:${PYTHONPATH}}" \
-      python utils/build_ascendc.py "${TASK}" -v "${ASCENDC_SOC_VERSION}" --clean
+      python utils/build_ascendc.py "${TASK_DIR}" -v "${ASCENDC_SOC_VERSION}" --clean
   else
     PYTHONPATH="${PYTHONPATH_PREFIX}${PYTHONPATH:+:${PYTHONPATH}}" \
-      python utils/build_ascendc.py "${TASK}" -v "${ASCENDC_SOC_VERSION}"
+      python utils/build_ascendc.py "${TASK_DIR}" -v "${ASCENDC_SOC_VERSION}"
   fi
   PYTHONPATH="${PYTHONPATH_PREFIX}${PYTHONPATH:+:${PYTHONPATH}}" \
     ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES}" \
-    python utils/verification_ascendc.py "${TASK}"
+    python utils/verification_ascendc.py "${TASK_DIR}"
   exit 0
 fi
 

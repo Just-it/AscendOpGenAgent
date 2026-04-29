@@ -28,7 +28,8 @@ argument-hint: >
 .
 ├── {output_dir}/         # 当前活跃任务目录
 │   ├── model.py          # 参考 PyTorch 模型
-│   ├── <op_name>.json    # 测试用例文件（JSON Lines）
+│   ├── model.json        # 测试用例文件（JSON Lines），model.py 按 __file__ 查找
+│   ├── <op_name>.json    # 原始测试用例文件（备份保留）
 │   ├── <op_name>.json.bak# 原始 .json 备份
 │   ├── model_new_tilelang.py # TileLang 优化实现（如存在）
 │   ├── model_new_ascendc.py  # AscendC 优化实现（如存在）

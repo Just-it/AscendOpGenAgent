@@ -30,6 +30,17 @@ PRECISION_THRESHOLDS = {
     "float8_e5m2": 2 ** -2,    # ≈ 0.25
 }
 
+# 量化整数输出的 LSB tolerance：dynamic quant / smooth quant 等算子的
+# int8/int16 输出，在 NPU 实现侧通常经过 fp32→fp16→int 的中转 cast，
+# 与 PyTorch CPU 全 fp32 .round() 比较时会出现 ±1 LSB 噪声。
+# 这里允许每个元素最多差 1 个 LSB（相当于浮点的 1 ulp 容忍）。
+# int32 / int64 / bool 不带 round 语义（通常是索引、计数、mask），
+# 仍走严格 torch.equal。
+INT_LSB_TOLERANCE = {
+    torch.int8:  1,
+    torch.int16: 1,
+}
+
 
 def _compute_mere(actual: torch.Tensor, golden: torch.Tensor, eps: float = 1e-7) -> float:
     """计算平均相对误差 (Mean Relative Error).
@@ -301,7 +312,12 @@ def _compare_values(lhs, rhs, path: str = "output"):
         if lhs.shape != rhs.shape:
             return False, f"{path}: shape mismatch: ref={tuple(lhs.shape)}, cand={tuple(rhs.shape)}"
 
-        # 整数/布尔类型直接元素级相等判断
+        # 整数/布尔类型分两类：
+        #   - int8 / int16：量化输出。NPU 实现走 fp32→fp16→int 中转 cast，
+        #     PyTorch CPU 走全 fp32 .round()，最低位舍入路径不同，
+        #     允许 ±1 LSB（INT_LSB_TOLERANCE）。
+        #   - int32 / int64 / bool：无 round 语义（索引、计数、mask 之类），
+        #     仍走 torch.equal 严格按位。
         needs_numeric_check = (
             torch.is_floating_point(lhs)
             or torch.is_floating_point(rhs)
@@ -309,6 +325,17 @@ def _compare_values(lhs, rhs, path: str = "output"):
             or rhs.is_complex()
         )
         if not needs_numeric_check:
+            tol = INT_LSB_TOLERANCE.get(lhs.dtype) if lhs.dtype == rhs.dtype else None
+            if tol is not None:
+                # 用 int32 做差，避免 int8 自身相减溢出。
+                diff = (rhs.to(torch.int32) - lhs.to(torch.int32)).abs()
+                max_abs = diff.max().item() if diff.numel() else 0
+                if max_abs <= tol:
+                    return True, (
+                        f"{path}: matched within ±{tol} LSB "
+                        f"(max_abs_diff={max_abs}, dtype={lhs.dtype})"
+                    )
+                return False, f"{path}: {_tensor_diff_summary(lhs, rhs)}"
             if torch.equal(lhs, rhs):
                 return True, f"{path}: matched"
             return False, f"{path}: {_tensor_diff_summary(lhs, rhs)}"
@@ -510,6 +537,10 @@ def _run_verification(op: str):
                 ref_out = ref_model(*ref_inputs)
                 cand_out = cand_model(*cand_inputs)
 
+            if hasattr(ref_model, "postprocess_output"):
+                ref_out = ref_model.postprocess_output(ref_out, inputs)
+                cand_out = ref_model.postprocess_output(cand_out, inputs)
+                
             ref_out = _normalize_output(ref_out)
             cand_out = _normalize_output(cand_out)
 

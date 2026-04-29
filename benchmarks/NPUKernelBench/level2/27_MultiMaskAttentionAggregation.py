@@ -86,7 +86,10 @@ def get_input_groups():
                         tensors[name] = torch.randint(0, max_val, shape, dtype=dtype)
                     else:
                         dtype = {'float32': torch.float32, 'float16': torch.float16, 'bfloat16': torch.bfloat16, 'int32': torch.int32, 'int64': torch.int64, 'int8': torch.int8, 'bool': torch.bool}.get(dtype_str, torch.float32)
-                        tensors[name] = torch.randn(shape, dtype=dtype)
+                        if name == 'ref_target_masks':
+                            tensors[name] = (torch.rand(shape) > 0.5).to(dtype)
+                        else:
+                            tensors[name] = torch.randn(shape, dtype=dtype)
                 elif inp['type'] == 'attr':
                     tensors[inp['name']] = inp['value']
 

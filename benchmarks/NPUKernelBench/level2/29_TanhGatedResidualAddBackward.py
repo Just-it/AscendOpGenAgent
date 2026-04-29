@@ -69,6 +69,9 @@ def get_input_groups():
                         max_val = {'int32': 1000, 'int64': 10000, 'int8': 127}.get(dtype_str, 100)
                         dtype = {'float32': torch.float32, 'float16': torch.float16, 'bfloat16': torch.bfloat16, 'int32': torch.int32, 'int64': torch.int64, 'int8': torch.int8, 'bool': torch.bool}[dtype_str]
                         tensors[name] = torch.randint(0, max_val, shape, dtype=dtype)
+                    elif name == 'mask':
+                        dtype = {'float32': torch.float32, 'float16': torch.float16, 'bfloat16': torch.bfloat16, 'int32': torch.int32, 'int64': torch.int64, 'int8': torch.int8, 'bool': torch.bool}.get(dtype_str, torch.float32)
+                        tensors[name] = torch.randint(0, 2, shape, dtype=dtype)
                     else:
                         dtype = {'float32': torch.float32, 'float16': torch.float16, 'bfloat16': torch.bfloat16, 'int32': torch.int32, 'int64': torch.int64, 'int8': torch.int8, 'bool': torch.bool}.get(dtype_str, torch.float32)
                         tensors[name] = torch.randn(shape, dtype=dtype)

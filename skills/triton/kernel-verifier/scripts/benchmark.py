@@ -4,6 +4,7 @@
 import argparse
 import gc
 import json
+import math
 import os
 import shutil
 import sys
@@ -53,6 +54,8 @@ class SingleShapeResult:
 
     失败用例时 framework / implementation / speedup_vs_torch 为 None，
     status="fail" 且附带 error_type / error_msg。
+    通过用例但 speedup 异常（NaN/Inf/0/负数）时 status="pass"，
+    speedup_vs_torch 落盘为 null，case_idx 收集到 BenchmarkResult 的对应分类列表。
     """
     case_idx: int
     input_desc: List[Dict[str, Any]]
@@ -66,7 +69,12 @@ class SingleShapeResult:
 
 @dataclass
 class BenchmarkResult:
-    """完整性能测试结果"""
+    """完整性能测试结果。
+
+    speedup_vs_torch: 各通过 shape 加速比的几何平均(不含异常 shape)。
+    *_indices: 五类异常 shape 的 case_idx 列表(从 1 开始),与 passed_cases 不冲突,
+               异常 shape 仍计入 passed_cases,只是 s_i 不进入几何平均。
+    """
     op_name: str
     warmup: int
     repeats: int
@@ -76,8 +84,11 @@ class BenchmarkResult:
     total_cases: int = 1
     passed_cases: int = 0
     failed_cases: int = 0
-    total_framework_latency_ms: Optional[float] = None
-    total_implementation_latency_ms: Optional[float] = None
+    nan_indices: List[int] = field(default_factory=list)
+    inf_indices: List[int] = field(default_factory=list)
+    zero_indices: List[int] = field(default_factory=list)
+    negative_indices: List[int] = field(default_factory=list)
+    none_indices: List[int] = field(default_factory=list)
     per_shape_results: List[SingleShapeResult] = field(default_factory=list)
 
 
@@ -433,25 +444,77 @@ def run_single_benchmark(
     )
 
 
-def compute_overall(
-    results: List[SingleShapeResult],
-) -> Tuple[Optional[PerformanceResult], Optional[PerformanceResult], Optional[float], Optional[float], Optional[float]]:
-    """基于通过的 shape 做延时加权汇总。
+def classify_speedup(s: Any) -> str:
+    """对单个 shape 的 speedup 值分类。
+
+    判定优先级：none → nan → inf → negative → zero → valid
 
     Returns:
-        (overall_framework, overall_implementation, overall_speedup,
-         total_framework_latency_ms, total_implementation_latency_ms)
-        全部 shape 均失败时，所有返回值为 None。
+        "none" | "nan" | "inf" | "negative" | "zero" | "valid"
+    """
+    if s is None:
+        return "none"
+    if not isinstance(s, (int, float)):
+        return "none"
+    if math.isnan(s):
+        return "nan"
+    if math.isinf(s):
+        return "inf"
+    if s < 0:
+        return "negative"
+    if s == 0:
+        return "zero"
+    return "valid"
+
+
+def compute_overall(
+    results: List[SingleShapeResult],
+) -> Tuple[Optional[PerformanceResult], Optional[PerformanceResult], Optional[float],
+           List[int], List[int], List[int], List[int], List[int]]:
+    """基于通过的 shape 做几何平均聚合。
+
+    异常 shape（speedup 为 None/NaN/Inf/负数/0）不进入几何平均，
+    但其 case_idx 收集到对应类别列表中，供报告展示。
+    异常 shape 仍计入 passed_cases（算子功能正常，只是测不准）。
+
+    Returns:
+        (overall_framework, overall_implementation, overall_speedup_geomean,
+         nan_indices, inf_indices, zero_indices, negative_indices, none_indices)
+        全部 shape 均失败时，前三个返回值为 None，索引列表为空。
     """
     passed = [r for r in results if r.status == "pass" and r.framework and r.implementation]
+
+    nan_indices: List[int] = []
+    inf_indices: List[int] = []
+    zero_indices: List[int] = []
+    negative_indices: List[int] = []
+    none_indices: List[int] = []
+    valid_speedups: List[float] = []
+
+    for r in passed:
+        category = classify_speedup(r.speedup_vs_torch)
+        if category == "valid":
+            valid_speedups.append(r.speedup_vs_torch)
+        elif category == "nan":
+            nan_indices.append(r.case_idx)
+        elif category == "inf":
+            inf_indices.append(r.case_idx)
+        elif category == "negative":
+            negative_indices.append(r.case_idx)
+        elif category == "zero":
+            zero_indices.append(r.case_idx)
+        else:  # "none"
+            none_indices.append(r.case_idx)
+
     if not passed:
-        return None, None, None, None, None
+        return (None, None, None,
+                nan_indices, inf_indices, zero_indices, negative_indices, none_indices)
 
     n = len(passed)
     sum_fw = sum(r.framework.avg_latency_ms for r in passed)
     sum_impl = sum(r.implementation.avg_latency_ms for r in passed)
 
-    # 均值（保留向后兼容的 avg_latency_ms 语义：各 shape 延时均值）
+    # 兼容字段：avg_latency_ms = 各 shape 延时算术平均
     avg_fw = sum_fw / n
     avg_impl = sum_impl / n
 
@@ -466,7 +529,14 @@ def compute_overall(
         for op, t in r.implementation.operators.items():
             impl_ops[op] = impl_ops.get(op, 0) + t
 
-    overall_speedup = sum_fw / sum_impl if sum_impl > 0 else 0.0
+    # 几何平均加速比（对数域，数值稳定），无有效 shape 则为 None
+    if valid_speedups:
+        overall_speedup: Optional[float] = round(
+            math.exp(sum(math.log(s) for s in valid_speedups) / len(valid_speedups)),
+            4,
+        )
+    else:
+        overall_speedup = None
 
     return (
         PerformanceResult(
@@ -479,9 +549,12 @@ def compute_overall(
             peak_memory_mb=round(avg_impl_mem, 2),
             operators={k: round(v / n, 4) for k, v in impl_ops.items()},
         ),
-        round(overall_speedup, 4),
-        round(sum_fw, 4),
-        round(sum_impl, 4),
+        overall_speedup,
+        nan_indices,
+        inf_indices,
+        zero_indices,
+        negative_indices,
+        none_indices,
     )
 
 
@@ -553,7 +626,8 @@ def benchmark_implementations(config: BenchmarkConfig) -> BenchmarkResult:
     passed_cases = sum(1 for r in per_shape_results if r.status == "pass")
     failed_cases = total_cases - passed_cases
 
-    overall_fw, overall_impl, overall_speedup, total_fw_ms, total_impl_ms = compute_overall(per_shape_results)
+    overall_fw, overall_impl, overall_speedup, \
+        nan_idxs, inf_idxs, zero_idxs, neg_idxs, none_idxs = compute_overall(per_shape_results)
 
     return BenchmarkResult(
         op_name=config.op_name,
@@ -565,8 +639,11 @@ def benchmark_implementations(config: BenchmarkConfig) -> BenchmarkResult:
         total_cases=total_cases,
         passed_cases=passed_cases,
         failed_cases=failed_cases,
-        total_framework_latency_ms=total_fw_ms,
-        total_implementation_latency_ms=total_impl_ms,
+        nan_indices=nan_idxs,
+        inf_indices=inf_idxs,
+        zero_indices=zero_idxs,
+        negative_indices=neg_idxs,
+        none_indices=none_idxs,
         per_shape_results=per_shape_results,
     )
 
@@ -581,6 +658,11 @@ def _perf_to_dict(p: Optional[PerformanceResult]) -> Optional[Dict[str, Any]]:
     }
 
 
+def _normalize_shape_speedup(s: Optional[float]) -> Optional[float]:
+    """落盘前规范单 shape speedup：异常值统一写为 None（JSON 中即 null）。"""
+    return s if classify_speedup(s) == "valid" else None
+
+
 def result_to_dict(result: BenchmarkResult) -> Dict[str, Any]:
     """将 BenchmarkResult 转换为字典格式。"""
     base_dict: Dict[str, Any] = {
@@ -590,14 +672,18 @@ def result_to_dict(result: BenchmarkResult) -> Dict[str, Any]:
         "total_cases": result.total_cases,
         "passed_cases": result.passed_cases,
         "failed_cases": result.failed_cases,
+        "nan_indices": result.nan_indices,
+        "inf_indices": result.inf_indices,
+        "zero_indices": result.zero_indices,
+        "negative_indices": result.negative_indices,
+        "none_indices": result.none_indices,
         "framework": _perf_to_dict(result.framework),
         "implementation": _perf_to_dict(result.implementation),
         "speedup_vs_torch": result.speedup_vs_torch,
-        "total_framework_latency_ms": result.total_framework_latency_ms,
-        "total_implementation_latency_ms": result.total_implementation_latency_ms,
     }
 
-    # per_shape_results 保留全量（含失败用例），带 status 列
+    # per_shape_results 保留全量（含失败用例），带 status 列；
+    # 异常 speedup（NaN/Inf/0/负数/None）落盘为 null
     base_dict["per_shape_results"] = [
         {
             "case_idx": r.case_idx,
@@ -615,7 +701,7 @@ def result_to_dict(result: BenchmarkResult) -> Dict[str, Any]:
                     "peak_memory_mb": r.implementation.peak_memory_mb,
                 } if r.implementation else None
             ),
-            "speedup_vs_torch": r.speedup_vs_torch,
+            "speedup_vs_torch": _normalize_shape_speedup(r.speedup_vs_torch),
             "error_type": r.error_type,
             "error_msg": r.error_msg,
         }
@@ -628,6 +714,92 @@ def result_to_dict(result: BenchmarkResult) -> Dict[str, Any]:
 # ============================================================================
 # 命令行入口
 # ============================================================================
+
+VERIFY_GATE_FAILURES_TO_PRINT = 5
+
+
+def resolve_verify_json_name(triton_impl_name: str) -> str:
+    """按 impl_name 推导 verify_result json 文件名。
+
+    - triton_ascend_impl（默认）→ verify_result.json（Phase 3）
+    - triton_baseline / triton_optimized → verify_result_{suffix}.json（Phase 4）
+    - 其他自定义名 → verify_result_{name 去掉 triton_ 前缀}.json
+    """
+    if triton_impl_name == TRITON_IMPL_NAME_DEFAULT:
+        return "verify_result.json"
+    suffix = triton_impl_name
+    if suffix.startswith("triton_"):
+        suffix = suffix[len("triton_"):]
+    return f"verify_result_{suffix}.json"
+
+
+def check_verify_gate(verify_dir: str, triton_impl_name: str) -> None:
+    """L1 闸门：benchmark 启动前必须确认对应 verify_result 全过。
+
+    不通过时直接 exit 2，stderr 打印路径 / 计数 / failures 摘要，
+    便于上游 agent 把错误等价映射到 verify 失败处理路径。
+    """
+    verify_json_name = resolve_verify_json_name(triton_impl_name)
+    verify_json_path = os.path.join(verify_dir, verify_json_name)
+
+    if not os.path.isfile(verify_json_path):
+        print(
+            f"[L1 闸门] 拒绝执行 benchmark：未找到 verify_result 文件\n"
+            f"  expected: {verify_json_path}\n"
+            f"  triton_impl_name: {triton_impl_name}\n"
+            f"  请先运行 verify.py，或在确实不需要精度校验的场景下传 --verify_not_required",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    try:
+        with open(verify_json_path, "r", encoding="utf-8") as f:
+            verify_data = json.load(f)
+    except Exception as e:
+        print(
+            f"[L1 闸门] 拒绝执行 benchmark：verify_result 文件读取失败\n"
+            f"  path: {verify_json_path}\n"
+            f"  error: {type(e).__name__}: {e}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    total = verify_data.get("total_cases", 0)
+    passed = verify_data.get("passed_cases", 0)
+    failures = verify_data.get("failures", []) or []
+
+    if total == 0:
+        print(
+            f"[L1 闸门] 拒绝执行 benchmark：verify_result 中 total_cases=0\n"
+            f"  path: {verify_json_path}\n"
+            f"  说明 verify.py 未实际跑任何 shape，benchmark 无意义",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    if passed != total:
+        print(
+            f"[L1 闸门] 拒绝执行 benchmark：精度校验未全通过\n"
+            f"  path: {verify_json_path}\n"
+            f"  passed_cases: {passed}/{total}\n"
+            f"  triton_impl_name: {triton_impl_name}",
+            file=sys.stderr,
+        )
+        if failures:
+            print(
+                f"  前 {min(VERIFY_GATE_FAILURES_TO_PRINT, len(failures))} "
+                f"条 failures（共 {len(failures)} 条）：",
+                file=sys.stderr,
+            )
+            for f_item in failures[:VERIFY_GATE_FAILURES_TO_PRINT]:
+                print(
+                    f"    - case_idx={f_item.get('case_idx')} "
+                    f"error_type={f_item.get('error_type')} "
+                    f"input_desc={f_item.get('input_desc')}",
+                    file=sys.stderr,
+                )
+        sys.exit(2)
+
 
 def main():
     parser = argparse.ArgumentParser(description="性能测试脚本")
@@ -642,12 +814,23 @@ def main():
                        help="跳过 framework 性能测试（GPU Kernel 模式使用）")
     parser.add_argument("--framework_latency_ms", type=float, default=0.0,
                        help="预设的 framework 参考延迟（毫秒），用于计算 speedup")
+    parser.add_argument("--verify_not_required", action="store_true",
+                       help="跳过 L1 verify 闸门（默认强制要求 verify_result 全过）")
     args = parser.parse_args()
 
     verify_dir = os.path.abspath(args.verify_dir)
     if not os.path.isdir(verify_dir):
         print(f"错误: 验证目录不存在: {verify_dir}", file=sys.stderr)
         sys.exit(1)
+
+    if args.verify_not_required:
+        print(
+            f"[L1 闸门] 已通过 --verify_not_required 跳过 verify 闸门检查 "
+            f"(triton_impl_name={args.triton_impl_name})",
+            file=sys.stderr,
+        )
+    else:
+        check_verify_gate(verify_dir, args.triton_impl_name)
 
     config = BenchmarkConfig(
         op_name=args.op_name,
@@ -668,12 +851,24 @@ def main():
         if result_dict["speedup_vs_torch"] is not None:
             print(f"  框架实现 - 平均延迟: {result_dict['framework']['avg_latency_ms']:.4f} ms")
             print(f"  生成实现 - 平均延迟: {result_dict['implementation']['avg_latency_ms']:.4f} ms")
-            print(f"  加速比 (延时加权): {result_dict['speedup_vs_torch']:.4f}x")
-            if result_dict['total_framework_latency_ms'] is not None:
-                print(f"  总延时: framework={result_dict['total_framework_latency_ms']:.4f} ms, "
-                      f"impl={result_dict['total_implementation_latency_ms']:.4f} ms")
+            print(f"  加速比 (几何平均): {result_dict['speedup_vs_torch']:.4f}x")
         else:
-            print("  所有 shape 均失败，无可用性能数据")
+            print("  无可用加速比数据（全部 shape 失败或 speedup 异常）")
+
+        excluded_total = (
+            len(result_dict["nan_indices"]) + len(result_dict["inf_indices"])
+            + len(result_dict["zero_indices"]) + len(result_dict["negative_indices"])
+            + len(result_dict["none_indices"])
+        )
+        if excluded_total > 0:
+            print(
+                f"  异常 shape (不计入几何平均): "
+                f"nan={result_dict['nan_indices']}, "
+                f"inf={result_dict['inf_indices']}, "
+                f"zero={result_dict['zero_indices']}, "
+                f"neg={result_dict['negative_indices']}, "
+                f"none={result_dict['none_indices']}"
+            )
 
         if args.output:
             with open(args.output, "w", encoding="utf-8") as f:

@@ -453,6 +453,11 @@ def get_init_inputs():
   "total_cases": 1,
   "passed_cases": 1,
   "failed_cases": 0,
+  "nan_indices": [],
+  "inf_indices": [],
+  "zero_indices": [],
+  "negative_indices": [],
+  "none_indices": [],
   "framework": {
     "avg_latency_ms": 0.2345,
     "peak_memory_mb": 2.50,
@@ -464,8 +469,6 @@ def get_init_inputs():
     "operators": {}
   },
   "speedup_vs_torch": 1.4965,
-  "total_framework_latency_ms": 0.2345,
-  "total_implementation_latency_ms": 0.1567,
   "per_shape_results": [
     {
       "case_idx": 1,
@@ -491,6 +494,11 @@ def get_init_inputs():
   "total_cases": 3,
   "passed_cases": 3,
   "failed_cases": 0,
+  "nan_indices": [],
+  "inf_indices": [],
+  "zero_indices": [],
+  "negative_indices": [],
+  "none_indices": [],
   "framework": {
     "avg_latency_ms": 0.4567,
     "peak_memory_mb": 8.50,
@@ -501,9 +509,7 @@ def get_init_inputs():
     "peak_memory_mb": 4.25,
     "operators": {}
   },
-  "speedup_vs_torch": 1.4625,
-  "total_framework_latency_ms": 1.3702,
-  "total_implementation_latency_ms": 0.9369,
+  "speedup_vs_torch": 1.4910,
   "per_shape_results": [
     {
       "case_idx": 1,
@@ -547,14 +553,13 @@ def get_init_inputs():
 | `warmup` | `int` | 预热次数 |
 | `repeats` | `int` | 正式测试次数 |
 | `total_cases` | `int` | 测试的 Shape 数量（单 Shape 为 1，多 Shape ≥2） |
-| `passed_cases` / `failed_cases` | `int` | 多 Shape 通过 / 失败用例数 |
+| `passed_cases` / `failed_cases` | `int` | 多 Shape 通过 / 失败用例数（异常 `s_i` 的 shape 仍计入 `passed_cases`）|
+| `nan_indices` / `inf_indices` / `zero_indices` / `negative_indices` / `none_indices` | `List[int]` | 各类异常 `s_i` 的 case_idx 列表（从 1 开始，不进入几何平均）；无异常时为 `[]` |
 | `framework.avg_latency_ms` | `float` | PyTorch 实现平均延迟（毫秒），各 Shape 算术平均（兼容语义）|
 | `framework.peak_memory_mb` | `float` | PyTorch 峰值内存（MB）各 Shape 平均 |
 | `implementation.avg_latency_ms` | `float` | 实现平均延迟（毫秒），各 Shape 算术平均（兼容语义）|
 | `implementation.peak_memory_mb` | `float` | 实现峰值内存（MB）各 Shape 平均 |
-| `total_framework_latency_ms` | `float` | **所有通过 Shape 的 framework 延时之和** |
-| `total_implementation_latency_ms` | `float` | **所有通过 Shape 的 implementation 延时之和** |
-| `speedup_vs_torch` | `float` | **延时加权加速比** = `total_framework / total_implementation`（仅对 status==pass 的 Shape 求和）|
+| `speedup_vs_torch` | `float\|null` | **几何平均加速比** = `(∏ s_i)^(1/n)`，仅对 status==pass 且 `s_i` 为有限正数的 Shape；全部异常时为 `null` |
 | `perf_method` | `str` | 评测方式："profiler"（torch_npu.profiler）或 "fallback"（time.perf_counter 兜底） |
 | `skill_path` | `str` | 使用的 benchmark skill 路径 |
 | `per_shape_results` | `List[Dict]` | 各 Shape 明细数据（永远存在，含失败用例）|
@@ -567,7 +572,7 @@ def get_init_inputs():
 | `input_desc` | `List[Dict]` | 输入结构化描述（tensor: shape+dtype；scalar: value）|
 | `status` | `str` | `"pass"` 或 `"fail"` |
 | `framework` / `implementation` | `Dict\|null` | pass 时含 `avg_latency_ms`、`peak_memory_mb`；fail 时为 null |
-| `speedup_vs_torch` | `float\|null` | 该 Shape 的加速比；fail 时为 null |
+| `speedup_vs_torch` | `float\|null` | 该 Shape 的加速比；fail 或 `s_i` 异常（NaN/Inf/0/负数/None）时为 null |
 | `error_type` / `error_msg` | `str\|null` | fail 时记录异常类型与堆栈（截断 2000 字符）|
 
 ### 适用场景

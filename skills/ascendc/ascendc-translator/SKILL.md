@@ -32,7 +32,8 @@ argument-hint: >
 .
 ├── {output_dir}/         # 当前活跃任务目录
 │   ├── model.py          # 参考 PyTorch 模型，禁止修改
-│   ├── <op_name>.json    # 测试用例文件（JSON Lines）
+│   ├── model.json        # 测试用例文件（JSON Lines），model.py 按 __file__ 查找
+│   ├── <op_name>.json    # 原始测试用例文件（备份保留）
 │   ├── <op_name>.json.bak# 原始 .json 备份
 │   ├── design/           # TileLang DSL 用于表达 kernel 设计
 │   │   ├── block_level/  # TileLang block-level 设计（已由上一阶段完成）

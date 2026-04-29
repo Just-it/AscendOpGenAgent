@@ -169,7 +169,9 @@ verify.py 会在 `verify_dir` 下生成 `verify_result.json`（或 `--output` �
 
 ## Step 4: 执行性能测试（验证通过后执行）
 
-**前置条件**：仅在 verify.py 的 `passed_cases == total_cases` 时执行（策略 A）。verify 有任何失败 → 禁止执行 benchmark.py。
+**前置条件（L1 脚本层强制）**：benchmark.py 启动时会自动按 `--triton_impl_name` 推导对应的 `verify_result` 文件并校验 `passed_cases == total_cases`；不通过时直接 **exit 2**，禁止运行 benchmark。详见下方"L1 verify 闸门"小节。
+
+仅在 verify.py 的 `passed_cases == total_cases` 时执行（策略 A）。verify 有任何失败 → 禁止执行 benchmark.py。
 
 使用 `bash` 工具调用本 skill 自带的 `scripts/benchmark.py` 脚本。
 
@@ -209,6 +211,32 @@ python3 /path/to/kernel-verifier/scripts/benchmark.py \
 | `--warmup` | 否 | warmup 次数，默认 5 |
 | `--repeats` | 否 | 正式测试次数，默认 50 |
 | `--output` | 否 | 性能报告输出路径（JSON 格式）|
+| `--verify_not_required` | 否 | 跳过 L1 verify 闸门（默认强制要求 verify_result 全过）|
+
+---
+
+### L1 verify 闸门
+
+benchmark.py 启动时按 `--triton_impl_name` 推导对应的 verify_result 文件名：
+
+| triton_impl_name | 对应 verify json |
+|-----------------|----------------|
+| `triton_ascend_impl`（默认，Phase 3）| `verify_result.json` |
+| `triton_baseline`（Phase 4 baseline）| `verify_result_baseline.json` |
+| `triton_optimized`（Phase 4 optimized）| `verify_result_optimized.json` |
+| 其他 `triton_xxx` | `verify_result_xxx.json` |
+
+**判定规则**（默认开启，传 `--verify_not_required` 可跳过）：
+
+| 情况 | 退出码 | 说明 |
+|------|-------|------|
+| 文件不存在 | exit 2 | 必须先跑 verify.py |
+| 文件读取失败 | exit 2 | JSON 损坏 |
+| `total_cases == 0` | exit 2 | verify 未实际跑任何 shape |
+| `passed_cases < total_cases` | exit 2 | 精度未全过，benchmark 无意义且会传染下游 |
+| `passed_cases == total_cases > 0` | 继续执行 benchmark | — |
+
+**exit 2 时 stderr 会打印**：verify_json 路径 / passed/total / 前 5 条 failures，便于上游 agent 把错误等价映射到 verify 失败处理路径。
 
 ---
 
@@ -226,6 +254,11 @@ python3 /path/to/kernel-verifier/scripts/benchmark.py \
   "total_cases": 3,
   "passed_cases": 3,
   "failed_cases": 0,
+  "nan_indices": [],
+  "inf_indices": [],
+  "zero_indices": [],
+  "negative_indices": [],
+  "none_indices": [],
   "framework": {
     "avg_latency_ms": 1.2345,
     "peak_memory_mb": 256.00,
@@ -237,8 +270,6 @@ python3 /path/to/kernel-verifier/scripts/benchmark.py \
     "operators": {"...": 0.0}
   },
   "speedup_vs_torch": 2.1746,
-  "total_framework_latency_ms": 3.7035,
-  "total_implementation_latency_ms": 1.7034,
   "per_shape_results": [
     {
       "case_idx": 1,
@@ -260,12 +291,33 @@ python3 /path/to/kernel-verifier/scripts/benchmark.py \
 |------|------|
 | `avg_latency_ms` | 各 shape 延时的算术平均（兼容语义）|
 | `peak_memory_mb` | 峰值内存占用（MB）|
-| `total_*_latency_ms` | **所有通过 shape 延时之和**（仅 status==pass 的 shape）|
-| `speedup_vs_torch` | **延时加权加速比** = `total_framework_latency_ms / total_implementation_latency_ms` |
-| `passed_cases` / `failed_cases` | 多 shape 通过 / 失败计数 |
+| `speedup_vs_torch` | **几何平均加速比** = `(∏ s_i)^(1/n)`，仅对 status==pass 且 `s_i` 为有限正数的 shape 取几何平均；全部异常时为 `null` |
+| `passed_cases` / `failed_cases` | 多 shape 通过 / 失败计数（异常 shape 仍计入 `passed_cases`，因为算子功能正常）|
+| `nan_indices` / `inf_indices` / `zero_indices` / `negative_indices` / `none_indices` | 各类异常 `s_i` 的 case_idx 列表（从 1 开始），不进入几何平均；无异常时为 `[]` |
 | `per_shape_results[].status` | `"pass"` 或 `"fail"` |
+| `per_shape_results[].speedup_vs_torch` | 该 shape 的加速比；fail 或异常时为 `null` |
 
-**退出码**：benchmark.py 永远 exit 0（除非脚本本身崩溃）；调用方通过读 JSON 判断 `passed_cases == total_cases`。
+**边界值处理**：
+
+`s_i = framework_latency_ms / impl_latency_ms` 可能因 profiler 故障、极小延时等出现异常值。`compute_overall` 对每个 `s_i` 按以下优先级分类：
+
+| 类别 | 判定 | 落盘行为 |
+|------|------|---------|
+| `none` | `s_i is None` | `per_shape.speedup_vs_torch = null`，case_idx 入 `none_indices` |
+| `nan` | `math.isnan(s_i)` | 同上，入 `nan_indices` |
+| `inf` | `math.isinf(s_i)` | 同上，入 `inf_indices` |
+| `negative` | `s_i < 0` | 同上，入 `negative_indices` |
+| `zero` | `s_i == 0` | 同上，入 `zero_indices` |
+| `valid` | 有限正数 | 进入几何平均 |
+
+异常 shape **仍计入 `passed_cases`**（算子功能正常，仅测量数据不可信），但 `s_i` 不参与整体几何平均。全部 shape 都异常时 `speedup_vs_torch = null`。
+
+**退出码**：
+- exit 0：benchmark 正常完成（按 shape 内部 try/except，pass/fail 写在 per_shape_results）
+- exit 1：脚本本身崩溃
+- exit 2：L1 verify 闸门拒绝（precondition 未满足，benchmark 未实际运行）
+
+调用方通过读 JSON 判断 `passed_cases == total_cases`；exit 2 时无 JSON 产出，应等价于"对应 verify 失败"处理。
 
 **返回**：
 - `perf_result`：dict（完整性能数据）
@@ -305,4 +357,4 @@ python3 /path/to/kernel-verifier/scripts/benchmark.py \
 **CLI 参数**：
 - `validate_triton_impl.py`: `<file_path>`, `[--json]`
 - `verify.py`: `--op_name`, `--verify_dir`, `--triton_impl_name`, `--timeout`, `--output`
-- `benchmark.py`: `--op_name`, `--verify_dir`, `--triton_impl_name`, `--warmup`, `--repeats`, `--output`, `--skip_framework`, `--framework_latency_ms`
+- `benchmark.py`: `--op_name`, `--verify_dir`, `--triton_impl_name`, `--warmup`, `--repeats`, `--output`, `--skip_framework`, `--framework_latency_ms`, `--verify_not_required`

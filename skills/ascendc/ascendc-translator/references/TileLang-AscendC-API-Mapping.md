@@ -5,6 +5,26 @@
 说明：
 - 对于部分 API，tensor-tensor 和 tensor-scalar 的 lowering 不同，分别列出。
 
+## Kernel 索引映射
+
+| TileLang API / 变量 | AscendC API / 表达式 | 备注 |
+| --- | --- | --- |
+| `with T.Kernel(block_num, is_npu=True) as (cid, vid)` | `KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_MIX_AIC_1_2)` 或 `KERNEL_TYPE_MIX_AIC_1_1` + `AscendC::GetBlockIdx()` / `AscendC::GetSubBlockIdx()` | `block_num` 对应 launch 的 `blockDim`。常见 Ascend NPU 有 20 个物理 AI core，每个 core 有 2 个 Vector core 和 1 个 Cube core。 |
+| `cid` | AIC 侧：`AscendC::GetBlockIdx()`；AIV 侧：`AscendC::GetBlockIdx() / AscendC::GetSubBlockNum()` | 物理 AI core id，通常范围为 `0..19`。AIC 侧 block id 已按物理 core 编号；AIV 侧同一个 physical core 下有多个 Vector sub-block，需要用 `GetSubBlockNum()` 折算出 core id。 |
+| `vid` | `AscendC::GetSubBlockIdx()` | core 内 Vector-side lane id，通常范围为 `0..1`。用于在同一个 physical core 内做两路 Vector 分工。 |
+
+常见写法：
+
+```cpp
+if ASCEND_IS_AIC {
+    coreIdx = AscendC::GetBlockIdx();
+}
+if ASCEND_IS_AIV {
+    coreIdx = AscendC::GetBlockIdx() / AscendC::GetSubBlockNum();
+    vid = AscendC::GetSubBlockIdx();
+}
+```
+
 ## 数据搬运
 
 | TileLang API | AscendC API | 备注 |

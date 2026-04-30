@@ -78,10 +78,13 @@ with T.Kernel(block_num, is_npu=True) as (cid, vid):
     ...
 ```
 
-Typical usage:
+On Ascend NPU, a common execution model is 20 physical AI cores. Each core has
+two Vector cores and one Cube core. In TileLang Ascend kernels:
 
-- `cid`: block or tile id
-- `vid`: Vector-side split id when a kernel has Cube/Vector cooperation
+- `cid` identifies the physical AI core, normally in the range `0..19`.
+- `vid` identifies the Vector-side lane within that core, normally in the range `0..1`.
+- For pure Vector kernels, use `cid` for coarse task partitioning across cores and
+  `vid` for the two-way Vector split inside each core.
 
 ### 2.4 Loops and Control Flow
 

@@ -274,15 +274,13 @@ Scalar usage note for `T.tile.mul`/`T.tile.add`/`T.tile.sub`/`T.tile.div` and si
 
 - `src1` can be a scalar.
 - When `src1` is a scalar, its dtype must match `src0` dtype.
-- Use explicit constructors such as `T.float32(src1)` or `T.bfloat16(src1)` before passing the scalar.
+- Use explicit constructors such as `T.float32(src1)` before passing the scalar.
 
 Example:
 
 ```python
 alpha = T.float32(1.0 / 127.0)
 T.tile.mul(scale_ub, row_max_ub, alpha)
-beta = T.bfloat16(0.5)
-T.tile.mul(x_ub, x_ub, beta)
 ```
 
 ### 6.2 Compare and Select

@@ -202,25 +202,29 @@ Case 15: fp32 (1,3,256,256) → 1024×1024 bicubic align_corners=True
 
 ## 7. 主要文件
 
+仓库标准 `archive_tasks/<op>/` 布局，与 `avg_pool3_d` / `gather_elements_v2` 等对齐。**生成的算子直接放在标准位置**：
+
 ```
-archive_tasks/28_Interpolate_analysis/
-├── README.md                           ← 本文件
-└── artifacts/
-    ├── kernel/                         ← AscendC kernel（手搓 primitives）
-    │   ├── interpolate_tiling.h        ← Tiling struct
-    │   ├── kernel_common.h             ← 工具
-    │   ├── interpolate_unified_kernel.h ← 主 kernel 模板（template <T_IN>）
-    │   ├── interpolate_unified_fp32.cpp ← fp32 launcher
-    │   ├── interpolate_unified_fp16.cpp ← fp16 launcher
-    │   ├── interpolate_unified_bf16.cpp ← bf16 launcher
-    │   └── pybind11.cpp                ← Python 绑定
-    ├── design/                         ← TileLang 设计表达（block + tile level）
-    ├── model.py                        ← 原始 benchmark reference
-    ├── model_new_ascendc.py            ← host wrapper（含 numpy.float32 step-by-step weight）
-    ├── model_new_tilelang.py           ← TileLang wrapper
-    ├── lessons.md                      ← 6 条沉淀
-    ├── trace.md                        ← 完整执行 trace
-    └── preformance.json                ← AscendC 端 latency / case
+archive_tasks/28_Interpolate/
+├── model.py                          ← 原始 benchmark reference
+├── model_new_ascendc.py              ← host wrapper（含 numpy.float32 step-by-step weight）
+├── model_new_tilelang.py             ← TileLang wrapper（设计表达）
+├── preformance.json                  ← AscendC 端 latency / case
+├── design/                           ← TileLang 设计
+│   ├── block_level/interpolate.py
+│   └── tile_level/interpolate.py
+├── kernel/                           ← AscendC kernel（全部手搓 primitives）
+│   ├── interpolate_tiling.h          ← Tiling struct
+│   ├── kernel_common.h               ← 工具
+│   ├── interpolate_unified_kernel.h  ← 主 kernel 模板（template <T_IN>）
+│   ├── interpolate_unified_fp32.cpp  ← fp32 launcher
+│   ├── interpolate_unified_fp16.cpp  ← fp16 launcher
+│   ├── interpolate_unified_bf16.cpp  ← bf16 launcher
+│   └── pybind11.cpp                  ← Python 绑定
+└── docs/
+    ├── PRECISION_ANALYSIS.md         ← 本文件
+    ├── lessons.md                    ← 6 条沉淀（precision-grind skill）
+    └── trace.md                      ← 完整执行 trace
 ```
 
 ---

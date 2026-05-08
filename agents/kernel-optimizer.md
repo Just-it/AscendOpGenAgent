@@ -101,6 +101,16 @@ verify_dir/
 export ASCEND_RT_VISIBLE_DEVICES=${npu}
 ```
 
+### 步骤 2.5：检索历史优化轮次
+
+从 `output_dir` 定位工作目录，读取之前所有优化轮次的历史文件：
+- `output/generated_code.py`：Phase 3 最终代码
+- `output/perf_result.json`：Phase 3 性能结果
+- `opt_round_0/` 到 `opt_round_{当前轮次-1}/optimized_code.py`：之前各轮优化代码
+- `opt_round_0/` 到 `opt_round_{当前轮次-1}/perf_result.json`：之前各轮性能结果
+
+将历史内容拼接到上下文中，供后续优化参考。
+
 ### 步骤 3：准备验证目录
 
 在 `verify_dir` 下创建三个文件：

@@ -85,17 +85,27 @@ skills:
 
 1. **检查输入字段是否齐全**。
 2. **设置运行时环境**：`export ASCEND_RT_VISIBLE_DEVICES=${npu}`
-3. **直接调用 `kernel-generator` skill**（使用 `skill` 工具），把收到的字段原样传给它。
+3. **检索历史轮次**：从 `output_path` 解析工作目录，读取 iter_0 到上一轮的所有历史文件：
+   - `generated_code.py`：每轮的生成代码
+   - `perf_result.json`：每轮的验证结果
+   - `verify/verify_result.json`：每轮的验证详情
+   将历史内容拼接到上下文中，供后续代码生成参考。
+4. **直接调用 `kernel-generator` skill**（使用 `skill` 工具），把收到的字段原样传给它。
    - **不要**在调用 skill 之前读取任何参考文档
    - **不要**在调用 skill 之前做代码分析或设计
    - skill 内部会处理所有知识加载
-4. 要求 skill 返回一份完整、可直接写盘的 Python 代码。
-5. **将返回结果写入 `output_path`**。
-6. **只返回简短结果**：
+5. 要求 skill 返回一份完整、可直接写盘的 Python 代码。
+6. **将返回结果写入 `output_path`**。
+7. **只返回简短结果**：
    - 成功：说明代码已写入 `output_path`
    - 失败：说明失败原因
 
-**防循环指令**：如果你发现自己在重复执行第3步（调用 skill）或反复读取文档，立即停止并返回失败原因。
+**防循环指令**：如果你发现自己在重复执行第4步（调用 skill）或反复读取文档，立即停止并返回失败原因。
+
+**历史检索说明**：
+- 从 `output_path`（如 `{工作目录}/output/iter_1/generated_code.py`）解析出工作目录和当前轮次
+- 读取该轮次之前的所有 iter_* 目录下的历史文件
+- 历史文件将作为上下文传递给 skill，帮助其了解之前的尝试和失败原因
 
 ---
 

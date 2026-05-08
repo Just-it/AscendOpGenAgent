@@ -4,6 +4,23 @@
 多 shape 模式下：每个 shape 独立 try/except，全部跑完后落盘 verify_result.json。
 策略 A：passed < total 即整体判失败（exit 1），同时失败清单记录在 JSON 的 `failures` 字段。
 
+精度判定标准：
+    allclose 样式逐元素判定：
+        abs(actual - golden) <= atol + rtol * abs(golden)
+
+当前阈值：
+    FLOAT32:
+        rtol = 1.220703125e-4 |  2**(-13)
+        atol = 1e-5
+
+    FLOAT16:
+        rtol = 9.765625e-4 |  2**(-10)
+        atol = 1e-3
+
+    BFLOAT16:
+        rtol = 7.8125e-3 |  2**(-7)
+        atol = 1e-2
+
 用法:
     python verify.py --op_name <算子名> [--verify_dir <验证目录>] [--timeout <超时秒数>]
 """
@@ -34,6 +51,7 @@ def describe_input(inputs):
         import torch
     except Exception:
         torch = None
+
     descs = []
     for x in inputs:
         if torch is not None and isinstance(x, torch.Tensor):
@@ -61,60 +79,74 @@ def cleanup_npu_memory():
     gc.collect()
 
 
-def get_limit(data_type):
-    """根据数据类型获取精度阈值 - 使用 2 的幂次方阈值（与 NPU Benchmark 标准一致）
+def get_allclose_tolerance(data_type):
+    """根据数据类型获取 allclose 样式精度阈值。
 
-    参考文档: 精度对比方法.md
-    数据类型: FLOAT16, BFLOAT16, FLOAT32, HiFloat32, FLOAT8 E4M3, FLOAT8 E5M2
-    判定标准: MERE < threshold 且 MARE < 10 * threshold
+    判定标准：
+        abs(actual - golden) <= atol + rtol * abs(golden)
 
-    阈值表:
-    | 数据类型      | 阈值 (2^n)      | 十进制值       |
-    |--------------|----------------|---------------|
-    | FLOAT16      | 2^{-10}        | 0.0009765625  |
-    | BFLOAT16     | 2^{-7}         | 0.0078125     |
-    | FLOAT32      | 2^{-13}        | 0.0001220703  |
-    | HiFloat32    | 2^{-11}        | 0.0004882812  |
-    | FLOAT8 E4M3  | 2^{-3}         | 0.125         |
-    | FLOAT8 E5M2  | 2^{-2}         | 0.25          |
+    当前采用阈值：
+        FLOAT32:
+            rtol = 2^{-13} = 1.220703125e-4
+            atol = 1e-5
 
-    由于 torch.dtype 中没有直接定义 HiFloat32，可通过字符串传入 "hifloat32" 获取对应阈值。
-    """  # noqa: E501
+        FLOAT16:
+            rtol = 2^{-10} = 9.765625e-4
+            atol = 1e-3
+
+        BFLOAT16:
+            rtol = 2^{-7} = 7.8125e-3
+            atol = 1e-2
+    """
     import torch
 
-    # 支持字符串类型（用于 HiFloat32 或其他自定义类型）
-    if isinstance(data_type, str):
-        str_to_threshold = {
-            "float16": 2**(-10),
-            "bfloat16": 2**(-7),
-            "float32": 2**(-13),
-            "hifloat32": 2**(-11),
-            "float8_e4m3": 2**(-3),
-            "float8_e5m2": 2**(-2),
-            "fp8_e4m3": 2**(-3),
-            "fp8_e5m2": 2**(-2),
-        }
-        return str_to_threshold.get(data_type.lower(), 2**(-13))
-
-    # torch.dtype 类型映射
-    dtype_threshold_map = {
-        torch.float16: 2**(-10),    # FLOAT16
-        torch.bfloat16: 2**(-7),    # BFLOAT16
-        torch.float32: 2**(-13),    # FLOAT32
+    default_tol = {
+        "rtol": 2**(-13),
+        "atol": 1e-5,
     }
 
-    # 安全获取 FP8 类型（PyTorch 2.0+ 支持）
-    # FLOAT8 E4M3: 2^{-3}
-    float8_e4m3 = getattr(torch, 'float8_e4m3fn', None) or getattr(torch, 'float8_e4m3', None)
-    if float8_e4m3 is not None:
-        dtype_threshold_map[float8_e4m3] = 2**(-3)
+    if isinstance(data_type, str):
+        key = data_type.lower().replace("torch.", "")
+        str_to_tol = {
+            "float32": {
+                "rtol":  2**(-13),
+                "atol": 1e-5,
+            },
+            "float": {
+                "rtol":  2**(-13),
+                "atol": 1e-5,
+            },
+            "float16": {
+                "rtol":  2**(-10),
+                "atol": 1e-3,
+            },
+            "half": {
+                "rtol":  2**(-10),
+                "atol": 1e-3,
+            },
+            "bfloat16": {
+                "rtol":  2**(-7),
+                "atol": 1e-2,
+            },
+        }
+        return str_to_tol.get(key, default_tol)
 
-    # FLOAT8 E5M2: 2^{-2}
-    float8_e5m2 = getattr(torch, 'float8_e5m2fn', None) or getattr(torch, 'float8_e5m2', None)
-    if float8_e5m2 is not None:
-        dtype_threshold_map[float8_e5m2] = 2**(-2)
+    dtype_to_tol = {
+        torch.float32: {
+            "rtol":  2**(-13),
+            "atol": 1e-5,
+        },
+        torch.float16: {
+            "rtol":  2**(-10),
+            "atol": 1e-3,
+        },
+        torch.bfloat16: {
+            "rtol":  2**(-7),
+            "atol": 1e-2,
+        },
+    }
 
-    return dtype_threshold_map.get(data_type, 2**(-13))
+    return dtype_to_tol.get(data_type, default_tol)
 
 
 def resolve_input_provider(torch_module):
@@ -125,16 +157,16 @@ def resolve_input_provider(torch_module):
     elif hasattr(torch_module, "get_inputs"):
         return [torch_module.get_inputs()], 1
     else:
-        raise AttributeError(
-            f"模块必须提供 get_inputs() 或 get_input_groups() 方法"
-        )
+        raise AttributeError("模块必须提供 get_inputs() 或 get_input_groups() 方法")
 
 
 def compare(fw_out, impl_out, data_type):
-    """对比框架输出和实现输出"""
+    """对比框架输出和实现输出。"""
     import torch
+
     fw_flat = fw_out.flatten().detach().cpu()
     impl_flat = impl_out.flatten()
+
     if isinstance(impl_flat, torch.Tensor):
         impl_flat = impl_flat.detach().cpu()
     else:
@@ -166,6 +198,7 @@ def compare(fw_out, impl_out, data_type):
             f"验证失败，Inf 位置不匹配: Framework={fw_inf_count}/{size}, "
             f"Implementation={impl_inf_count}/{size}"
         )
+
     if fw_inf_mask.any():
         if not torch.equal(
             torch.sign(fw_flat[fw_inf_mask]),
@@ -175,6 +208,7 @@ def compare(fw_out, impl_out, data_type):
 
     finite_mask = torch.isfinite(fw_flat) & torch.isfinite(impl_flat)
     finite_count = finite_mask.sum().item()
+
     if finite_count == 0:
         print("警告: 所有值都是非有限值，跳过精度检查")
         return
@@ -190,67 +224,120 @@ def compare(fw_out, impl_out, data_type):
     if impl_finite.dtype != fw_finite.dtype:
         impl_finite = impl_finite.to(fw_finite.dtype)
 
-    # 执行 NPU Benchmark 精度验证
-    _check_accuracy_npu_benchmark(fw_finite, impl_finite, data_type)
+    # 执行 allclose 精度验证
+    _check_accuracy_allclose(fw_finite, impl_finite, data_type)
 
 
-def _check_accuracy_npu_benchmark(golden, actual, data_type):
-    """执行 NPU Benchmark 精度验证。
+def _check_accuracy_allclose(golden, actual, data_type):
+    """执行 allclose 精度验证。
 
-    根据精度对比方法文档，验证两个张量的数值一致性：
-    - 计算 MERE（平均相对误差）和 MARE（最大相对误差）
-    - 使用 2 的幂次方作为阈值
-    - 判定标准：MERE < threshold 且 MARE < 10 * threshold
+    判定标准：
+        abs(actual - golden) <= atol + rtol * abs(golden)
 
     Args:
-        golden: 参考输出（金标准）
-        actual: 被测实现输出
-        data_type: 数据类型，用于获取对应的阈值
+        golden: 参考输出，通常是 PyTorch framework 输出
+        actual: 被测实现输出，通常是 Triton-Ascend 输出
+        data_type: 数据类型，用于获取对应阈值
 
     Raises:
         AssertionError: 当精度验证未通过时
     """
     import torch
 
-    # 统一转换为 float32 进行计算
     golden_f = golden.float()
     actual_f = actual.float()
 
-    # 先取 dtype 阈值，用作分母下界 clamp。
-    # 当 |y_ref| < threshold 时，按 |diff| / threshold 衡量，等价于
-    # "参考值已小到 dtype 精度极限时，改用绝对误差归一化"，避免零值/极小值附近误报。
-    threshold = get_limit(data_type)
+    if golden_f.shape != actual_f.shape:
+        raise AssertionError(
+            f"验证失败，输出形状不一致: golden={golden_f.shape}, actual={actual_f.shape}"
+        )
+
+    numel = golden_f.numel()
+    if numel == 0:
+        return
+
+    tol = get_allclose_tolerance(data_type)
+    rtol = tol["rtol"]
+    atol = tol["atol"]
 
     diff = (actual_f - golden_f).abs()
-    denom = golden_f.abs().clamp(min=threshold)
-    relative_error = diff / denom
+    golden_abs = golden_f.abs()
 
-    # 计算误差指标
-    MERE = relative_error.mean().item()  # 平均相对误差
-    MARE = relative_error.max().item()   # 最大相对误差
+    allowed_error = atol + rtol * golden_abs
+    close_mask = diff <= allowed_error
+    allclose_ok = bool(close_mask.all().item())
 
-    # 判定标准：MERE < t 且 MARE < 10t
-    is_pass = (MERE < threshold) and (MARE < 10 * threshold)
+    if not allclose_ok:
+        failed_close_mask = ~close_mask
+        failed_close_count = int(failed_close_mask.sum().item())
+        pass_rate = 1.0 - failed_close_count / max(numel, 1)
 
-    if not is_pass:
-        # 收集错误信息
-        mismatch_mask = relative_error > threshold
-        mismatch_indices = torch.where(mismatch_mask)[0]
-        num_to_show = min(10, len(mismatch_indices))
+        max_abs_err = diff.max().item()
+        mean_abs_err = diff.mean().item()
+        max_allowed_err = allowed_error.max().item()
+        mean_allowed_err = allowed_error.mean().item()
+
+        # 为了日志可读，计算一个诊断用相对误差。
+        # 注意：该 relative_error 只用于错误信息展示，不参与判定。
+        rel_denom_floor = atol / rtol
+        rel_denom = torch.clamp(golden_abs, min=rel_denom_floor)
+        relative_error = diff / rel_denom
+        max_rel_err = relative_error.max().item()
+        mean_rel_err = relative_error.mean().item()
+
+        failed_indices = torch.where(failed_close_mask)[0]
+        num_failed_to_show = min(10, len(failed_indices))
+
+        topk = min(10, numel)
+        top_rel_values, top_rel_indices = torch.topk(relative_error, k=topk)
 
         error_msg = (
-            f"验证失败，输出不一致: MERE={MERE:.6e}, MARE={MARE:.6e}, "
-            f"dtype={data_type}, threshold={threshold}\n"
+            "验证失败，输出不一致:\n"
+            f"  dtype={data_type}\n"
+            f"  numel={numel}\n"
+            f"  allclose_ok={allclose_ok}\n"
+            f"  pass_rate={pass_rate:.6%}\n"
+            f"  failed_close_count={failed_close_count}/{numel}\n"
+            "\n"
+            "阈值配置:\n"
+            f"  rtol={rtol:.12e}\n"
+            f"  atol={atol:.12e}\n"
+            f"  rel_denom_floor=atol/rtol={rel_denom_floor:.12e}  # 仅用于日志中的相对误差\n"
+            "\n"
+            "误差统计:\n"
+            f"  max_abs_err={max_abs_err:.12e}\n"
+            f"  mean_abs_err={mean_abs_err:.12e}\n"
+            f"  max_rel_err={max_rel_err:.12e}  # 仅日志\n"
+            f"  mean_rel_err={mean_rel_err:.12e}  # 仅日志\n"
+            f"  max_allowed_err={max_allowed_err:.12e}\n"
+            f"  mean_allowed_err={mean_allowed_err:.12e}\n"
         )
-        if len(mismatch_indices) > 0:
-            error_msg += f"前 {num_to_show} 个超出阈值的值:\n"
-            for i in range(num_to_show):
-                idx = mismatch_indices[i].item()
+
+        if failed_close_count > 0:
+            error_msg += f"\n前 {num_failed_to_show} 个 allclose 失败点:\n"
+            for i in range(num_failed_to_show):
+                idx = failed_indices[i].item()
                 error_msg += (
-                    f"  位置[{idx}]: framework={golden[idx]:.6e}, "
-                    f"impl={actual[idx]:.6e}, "
-                    f"相对误差={relative_error[idx]:.6e}\n"
+                    f"  位置[{idx}]: "
+                    f"golden={golden_f[idx].item():.12e}, "
+                    f"actual={actual_f[idx].item():.12e}, "
+                    f"abs_err={diff[idx].item():.12e}, "
+                    f"allowed={allowed_error[idx].item():.12e}, "
+                    f"rel_err={relative_error[idx].item():.12e}\n"
                 )
+
+        error_msg += f"\n相对误差最大的前 {topk} 个点，注意仅用于诊断，不参与判定:\n"
+        for i in range(topk):
+            idx = top_rel_indices[i].item()
+            error_msg += (
+                f"  位置[{idx}]: "
+                f"golden={golden_f[idx].item():.12e}, "
+                f"actual={actual_f[idx].item():.12e}, "
+                f"abs_err={diff[idx].item():.12e}, "
+                f"allowed={allowed_error[idx].item():.12e}, "
+                f"rel_err={relative_error[idx].item():.12e}\n"
+            )
+
         raise AssertionError(error_msg)
 
 
@@ -260,7 +347,7 @@ def run_single_case(
     inputs,
     device,
     case_idx,
-    total_cases
+    total_cases,
 ):
     """验证单组输入。失败时抛出 AssertionError。"""
     import torch
@@ -297,15 +384,27 @@ def run_single_case(
                 f"[用例 {case_idx}/{total_cases}] 输出 {i} 为 None: "
                 f"framework={fw_out is None}, impl={impl_out is None}"
             )
+
         if isinstance(fw_out, torch.Tensor) and isinstance(impl_out, torch.Tensor):
             try:
                 data_type = fw_out.dtype
                 compare(fw_out, impl_out, data_type)
             except AssertionError as e:
-                raise AssertionError(f"[用例 {case_idx}/{total_cases}] {str(e)}") from e
+                raise AssertionError(f"[用例 {case_idx}/{total_cases}] 输出 {i}: {str(e)}") from e
+        else:
+            if fw_out != impl_out:
+                raise AssertionError(
+                    f"[用例 {case_idx}/{total_cases}] 输出 {i} 非 Tensor 值不一致: "
+                    f"framework={fw_out}, impl={impl_out}"
+                )
 
 
-def verify_implementations(op_name, verify_dir, triton_impl_name="triton_ascend_impl", output_path=None):
+def verify_implementations(
+    op_name,
+    verify_dir,
+    triton_impl_name="triton_ascend_impl",
+    output_path=None,
+):
     """验证框架实现和生成实现的结果一致性。
 
     每个 shape 独立 try/except，全部跑完后写 verify_result.json。
@@ -340,8 +439,10 @@ def verify_implementations(op_name, verify_dir, triton_impl_name="triton_ascend_
         input_desc = describe_input(inputs)
         framework_model = None
         impl_model = None
+
         try:
             init_params = get_init_inputs()
+
             torch.manual_seed(0)
             torch.npu.manual_seed(0)
             framework_model = FrameworkModel(*init_params).to(device)
@@ -351,18 +452,28 @@ def verify_implementations(op_name, verify_dir, triton_impl_name="triton_ascend_
             impl_model = ModelNew(*init_params).to(device)
 
             run_single_case(
-                framework_model, impl_model, inputs, device, case_idx, total_cases
+                framework_model,
+                impl_model,
+                inputs,
+                device,
+                case_idx,
+                total_cases,
             )
             passed_cases += 1
+
         except Exception as e:
             err_detail = traceback.format_exc()
-            print(f"  [用例 {case_idx}/{total_cases}] 失败: {type(e).__name__}: {e}", file=sys.stderr)
+            print(
+                f"  [用例 {case_idx}/{total_cases}] 失败: {type(e).__name__}: {e}",
+                file=sys.stderr,
+            )
             failures.append({
                 "case_idx": case_idx,
                 "input_desc": input_desc,
                 "error_type": type(e).__name__,
                 "error_msg": truncate_error(err_detail),
             })
+
         finally:
             del framework_model
             del impl_model
@@ -370,9 +481,9 @@ def verify_implementations(op_name, verify_dir, triton_impl_name="triton_ascend_
 
     failed_cases = total_cases - passed_cases
 
-    # 落盘 verify_result.json
     if output_path is None:
         output_path = os.path.join(verify_dir, "verify_result.json")
+
     result = {
         "op_name": op_name,
         "total_cases": total_cases,
@@ -380,6 +491,7 @@ def verify_implementations(op_name, verify_dir, triton_impl_name="triton_ascend_
         "failed_cases": failed_cases,
         "failures": failures,
     }
+
     try:
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(result, f, indent=2, ensure_ascii=False)
@@ -403,22 +515,30 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="算子验证脚本")
     parser.add_argument("--op_name", required=True, help="算子名称")
     parser.add_argument(
-        "--verify_dir", default=".",
-        help="验证目录，包含 {op_name}_torch.py 和 {op_name}_triton_ascend_impl.py（默认当前目录）",
+        "--verify_dir",
+        default=".",
+        help=(
+            "验证目录，包含 {op_name}_torch.py 和 "
+            "{op_name}_triton_ascend_impl.py（默认当前目录）"
+        ),
     )
     parser.add_argument("--timeout", type=int, default=900, help="超时秒数（默认 900）")
     parser.add_argument(
-        "--triton_impl_name", default="triton_ascend_impl",
+        "--triton_impl_name",
+        default="triton_ascend_impl",
         help="Triton 实现模块名（不含 op_name 前缀，默认 triton_ascend_impl）",
     )
     parser.add_argument(
-        "--output", default=None,
+        "--output",
+        default=None,
         help="验证结果 JSON 输出路径（默认 {verify_dir}/verify_result.json）",
     )
     parser.add_argument(
-        "--_run", action="store_true",
-        help=argparse.SUPPRESS,  # 内部参数：子进程模式，直接执行验证
+        "--_run",
+        action="store_true",
+        help=argparse.SUPPRESS,
     )
+
     args = parser.parse_args()
 
     verify_dir = os.path.abspath(args.verify_dir)
@@ -430,25 +550,36 @@ if __name__ == "__main__":
         # 子进程模式：直接执行验证逻辑
         try:
             passed, total = verify_implementations(
-                args.op_name, verify_dir, args.triton_impl_name, args.output
+                args.op_name,
+                verify_dir,
+                args.triton_impl_name,
+                args.output,
             )
         except Exception as e:
             print(f"{e}", file=sys.stderr)
             traceback.print_exc()
             sys.exit(1)
+
         # 策略 A：passed < total → exit 1
         sys.exit(0 if passed == total and total > 0 else 1)
+
     else:
-        # 主进程模式：启动子进程执行验证，超时后 kill 整个进程树
+        # 主进程模式：启动子进程执行验证，超时后 kill 子进程
         cmd = [
-            sys.executable, os.path.abspath(__file__),
-            "--op_name", args.op_name,
-            "--verify_dir", verify_dir,
-            "--triton_impl_name", args.triton_impl_name,
+            sys.executable,
+            os.path.abspath(__file__),
+            "--op_name",
+            args.op_name,
+            "--verify_dir",
+            verify_dir,
+            "--triton_impl_name",
+            args.triton_impl_name,
             "--_run",
         ]
+
         if args.output:
             cmd.extend(["--output", args.output])
+
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -461,6 +592,7 @@ if __name__ == "__main__":
             sys.stdout.buffer.flush()
             sys.stderr.buffer.write(stderr)
             sys.stderr.buffer.flush()
+
             sys.exit(proc.returncode)
 
         except subprocess.TimeoutExpired:

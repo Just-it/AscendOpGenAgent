@@ -132,39 +132,6 @@ for batch in range(N):
         ...
 ```
 
-### 场景 3：小查找表在循环内被随机索引访问（结合离散访存优化）
-
-**问题代码**：
-
-```python
-# expert_map 是一个小查找表（如 128 个元素），在循环内通过随机索引访问
-for x in range(tl.cdiv(topk_numel, BLOCK_SIZE)):
-    expert_ids = tl.load(topk_ids_ptrs, ...)  # 运行时随机值
-    # 虽然 expert_map 指针是常量，但索引 expert_ids 是随机的
-    # 传统外提无法解决，因为每个循环迭代的 expert_ids 都不同
-    expert_map_ptrs = expert_map + expert_ids
-    mapped_ids = tl.load(expert_map_ptrs, ...)  # 循环内离散全局内存访问
-```
-
-**分析误区**：
-- 表面上看 `expert_map` 是参数指针，索引表达式 `expert_ids` 在循环内变化，似乎不符合传统"循环不变量外提"条件
-- 但实际上 `expert_map` 的内容（查找表本身）在循环内完全不变，只是**访问方式**是随机的
-
-**正确优化**：将查找表整体预加载到 UB，循环内用 `tl.gather` 局部查找
-
-```python
-# 循环外：将整个 expert_map 加载到 UB（真正的不变量）
-expert_map_data = tl.load(expert_map + tl.arange(0, num_experts)).to(tl.float32)
-
-for x in range(cntx):
-    e_ids = tl.load(topk_ids_ptr + x * BLOCK_SIZE + offsets, mask=mask, other=0)
-    # 循环内：从 UB 局部 buffer gather，而非全局离散加载
-    expert_ids = tl.gather(expert_map_data, e_ids, 0)
-    ...
-```
-
-**关键洞察**：当循环内出现 `tl.load(small_table + random_index)` 模式时，应将"外提"理解为**将整个查找表预加载到局部 buffer**，而非简单地将 `tl.load` 语句移到循环外。
-
 ---
 
 ## 注意事项

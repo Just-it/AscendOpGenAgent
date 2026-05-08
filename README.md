@@ -79,9 +79,14 @@ cd AscendOpGenAgent
 1. 在 AscendOpGenAgent 目录下配置 Agent和skills：
 ```bash
 mkdir -p .claude
+mkdir -p .claude/agents
 mkdir -p .claude/skills
-mv agents/triton-ascend-coder.md .claude/CLAUDE.md
-mv skills/triton/* .claude/skills/
+cp agents/triton-ascend-coder.md .claude/CLAUDE.md
+cp agents/kernel-generator.md .claude/agents/
+cp agents/kernel-verifier.md .claude/agents/
+cp agents/kernel-analyzer.md .claude/agents/
+cp agents/kernel-optimizer.md .claude/agents/
+cp -r skills/triton/* .claude/skills/
 ```
 
 2. 进入 AscendOpGenAgent 目录，启动 claude：
@@ -117,9 +122,14 @@ claude
 1. 在 AscendOpGenAgent 目录下创建 `.claude` 目录并配置 Agent：
 ```bash
 mkdir -p .claude
+mkdir -p .claude/agents
 mkdir -p .claude/skills
-mv agents/triton-ascend-coder.md .claude/CLAUDE.md
-mv skills/triton/* .claude/skills/
+cp agents/triton-ascend-coder.md .claude/CLAUDE.md
+cp agents/kernel-generator.md .claude/agents/
+cp agents/kernel-verifier.md .claude/agents/
+cp agents/kernel-analyzer.md .claude/agents/
+cp agents/kernel-optimizer.md .claude/agents/
+cp -r skills/triton/* .claude/skills/
 ```
 
 2. 进入 AscendOpGenAgent 目录，执行批量调度脚本：
@@ -221,9 +231,14 @@ arch是 ascend910b2，ASCEND_RT_VISIBLE_DEVICES=1
 1. 在 AscendOpGenAgent 目录下配置 Agent 和 skills：
 ```bash
 mkdir -p .claude
+mkdir -p .claude/agents
 mkdir -p .claude/skills
-mv agents/ascend-kernel-developer.md .claude/CLAUDE.md
-mv skills/ascendc/* .claude/skills/
+cp agents/triton-ascend-coder.md .claude/CLAUDE.md
+cp agents/kernel-generator.md .claude/agents/
+cp agents/kernel-verifier.md .claude/agents/
+cp agents/kernel-analyzer.md .claude/agents/
+cp agents/kernel-optimizer.md .claude/agents/
+cp -r skills/triton/* .claude/skills/
 ```
 
 2. 进入 AscendOpGenAgent 目录，启动 claude：
@@ -249,9 +264,14 @@ claude
 1. 在 AscendOpGenAgent 目录下创建 `.claude` 目录并配置 Agent：
 ```bash
 mkdir -p .claude
+mkdir -p .claude/agents
 mkdir -p .claude/skills
-mv agents/ascend-kernel-developer.md .claude/CLAUDE.md
-mv skills/ascendc/* .claude/skills/
+cp agents/triton-ascend-coder.md .claude/CLAUDE.md
+cp agents/kernel-generator.md .claude/agents/
+cp agents/kernel-verifier.md .claude/agents/
+cp agents/kernel-analyzer.md .claude/agents/
+cp agents/kernel-optimizer.md .claude/agents/
+cp -r skills/triton/* .claude/skills/
 ```
 
 2. 进入 AscendOpGenAgent 目录，执行批量调度脚本：

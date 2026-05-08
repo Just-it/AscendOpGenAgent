@@ -61,55 +61,6 @@ for n_start in range(0, N, BLOCK_SIZE):
 result = tl.sum(acc, axis=0)  # vector 规约
 ```
 
-### 2.1 2D 向量化规约
-
-**原始代码（每个 program 只处理 1 个 expert，1D 标量比较）**
-
-```python
-@triton.jit
-def count_naive(topk_ids_ptr, expert_num_tokens_ptr, num_experts, topk_numel,
-                expert_map, HAS_EXPERT_MAP: tl.constexpr, BLOCK_SIZE: tl.constexpr):
-    curr_expert = tl.program_id(0)  # 标量索引
-    offsets = tl.arange(0, BLOCK_SIZE)
-    acc = tl.zeros((BLOCK_SIZE,), dtype=tl.int32)  # 1D 累加器
-    for x in range(tl.cdiv(topk_numel, BLOCK_SIZE)):
-        expert_ids = tl.load(topk_ids_ptr + x * BLOCK_SIZE + offsets, ...)
-        has_curr_expert = tl.where(expert_ids == curr_expert, 1, 0)  # 标量比较
-        acc = acc + has_curr_expert
-    tl.store(expert_num_tokens_ptr + curr_expert, tl.sum(acc))
-```
-
-**优化后代码（每个 program 同时处理 EXPERT_BLOCK 个 expert，2D 向量化）**
-
-```python
-@triton.jit
-def count_2d(topk_ids_ptr, expert_num_tokens_ptr, num_experts: tl.constexpr,
-             topk_numel: tl.constexpr, expert_map, HAS_EXPERT_MAP: tl.constexpr,
-             BLOCK_SIZE: tl.constexpr, EXPERT_BLOCK: tl.constexpr):
-    # 向量索引：同时表示 EXPERT_BLOCK 个 expert
-    curr_expert = tl.program_id(0) * EXPERT_BLOCK + tl.arange(0, EXPERT_BLOCK)
-    offsets = tl.arange(0, BLOCK_SIZE)
-    # 2D 累加器：(EXPERT_BLOCK, BLOCK_SIZE)
-    acc = tl.zeros((EXPERT_BLOCK, BLOCK_SIZE), dtype=tl.float32)
-    cntx = (topk_numel - 1) // BLOCK_SIZE + 1
-    for x in range(cntx):
-        mask = offsets < (topk_numel - x * BLOCK_SIZE)
-        expert_ids = tl.load(topk_ids_ptr + x * BLOCK_SIZE + offsets, mask=mask, other=-1)
-        # 广播：(EXPERT_BLOCK, 1) == (1, BLOCK_SIZE) -> (EXPERT_BLOCK, BLOCK_SIZE)
-        has_curr_expert = (expert_ids[None, :] == curr_expert[:, None]).to(tl.float32)
-        has_curr_expert = tl.where(mask, has_curr_expert, 0.0)
-        acc = acc + has_curr_expert
-    # 沿 BLOCK_SIZE 轴规约，每行一个结果
-    tl.store(expert_num_tokens_ptr + curr_expert, tl.sum(acc, axis=1))
-```
-
-**关键变换**：
-- `curr_expert` 从标量 → 向量（`tl.arange(0, EXPERT_BLOCK)`）
-- `acc` 从 `(BLOCK_SIZE,)` 1D → `(EXPERT_BLOCK, BLOCK_SIZE)` 2D
-- 比较操作通过广播实现 2D 向量化：`expert_ids[None, :] == curr_expert[:, None]`
-- Grid = `(num_experts // EXPERT_BLOCK,)`，更接近物理核数
-
-
 ### 3. 标量控制流 → 向量掩码
 
 **场景一：两个分支的计算逻辑的定义域一样，均不会出现nan或inf等无效输出**

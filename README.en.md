@@ -79,8 +79,13 @@ Suitable for developers who need to quickly generate and verify the Triton imple
 1. Configure the Agent and skills in the AscendOpGenAgent directory:
 ```bash
 mkdir -p .claude
+mkdir -p .claude/agents
 mkdir -p .claude/skills
 cp agents/triton-ascend-coder.md .claude/CLAUDE.md
+cp agents/kernel-generator.md .claude/agents/
+cp agents/kernel-verifier.md .claude/agents/
+cp agents/kernel-analyzer.md .claude/agents/
+cp agents/kernel-optimizer.md .claude/agents/
 cp -r skills/triton/* .claude/skills/
 ```
 
@@ -117,8 +122,13 @@ Suitable for standard PyTorch operators batch generation and evaluation.
 1. Create the `.claude` directory in the AscendOpGenAgent directory and configure the Agent:
 ```bash
 mkdir -p .claude
+mkdir -p .claude/agents
 mkdir -p .claude/skills
 cp agents/triton-ascend-coder.md .claude/CLAUDE.md
+cp agents/kernel-generator.md .claude/agents/
+cp agents/kernel-verifier.md .claude/agents/
+cp agents/kernel-analyzer.md .claude/agents/
+cp agents/kernel-optimizer.md .claude/agents/
 cp -r skills/triton/* .claude/skills/
 ```
 
@@ -171,8 +181,13 @@ Upload the following files to `benchmarks/TritonNPUKernelBench/` directory (file
 1. Configure the Agent in the AscendOpGenAgent directory:
 ```bash
 mkdir -p .claude
+mkdir -p .claude/agents
 mkdir -p .claude/skills
 cp agents/triton-ascend-coder.md .claude/CLAUDE.md
+cp agents/kernel-generator.md .claude/agents/
+cp agents/kernel-verifier.md .claude/agents/
+cp agents/kernel-analyzer.md .claude/agents/
+cp agents/kernel-optimizer.md .claude/agents/
 cp -r skills/triton/* .claude/skills/
 ```
 
@@ -221,9 +236,14 @@ Suitable for developers who need to quickly generate and verify the AscendC impl
 1. Configure the Agent and skills in the AscendOpGenAgent directory:
 ```bash
 mkdir -p .claude
+mkdir -p .claude/agents
 mkdir -p .claude/skills
-mv agents/lingxi_code.md .claude/CLAUDE.md
-mv skills/ascend_call_generation/* .claude/skills/
+cp agents/triton-ascend-coder.md .claude/CLAUDE.md
+cp agents/kernel-generator.md .claude/agents/
+cp agents/kernel-verifier.md .claude/agents/
+cp agents/kernel-analyzer.md .claude/agents/
+cp agents/kernel-optimizer.md .claude/agents/
+cp -r skills/triton/* .claude/skills/
 ```
 
 2. Enter the AscendOpGenAgent directory and start Claude:

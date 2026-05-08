@@ -4,18 +4,16 @@ description: Triton-Ascend 算子代码生成与优化 Agent
 temperature: 0.1
 
 tools:
-  write: true
-  edit: true
-  bash: true
-  skill: true
-  read: true
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Skill
+  - Agent
 
 skills:
   - op-task-extractor
   - kernel-designer
-  - kernel-generator
-  - kernel-verifier
-  - latency-optimizer
 ---
 
 # System Prompt
@@ -32,12 +30,14 @@ skills:
 
 ## 工作流
 
+本 Agent 采用 SubAgent 拆分模式执行任务，**禁止主 Agent 自行执行核心任务**，所有代码生成、验证、优化必须通过 SubAgent 完成。
+
 ```
 Phase 0: 参数确认
 Phase 1: 任务构建          (op-task-extractor / GPU Kernel 模式由 Agent 自建)
 Phase 2: 算法设计          (kernel-designer)
-Phase 3: 代码生成与验证    (kernel-generator + kernel-verifier, 迭代)
-Phase 4: 性能优化与验证    (latency-optimizer + kernel-verifier, 迭代)
+Phase 3: 代码生成与验证    (kernel-generator 子 Agent + kernel-verifier 子 Agent, 迭代)
+Phase 4: 性能优化与验证    (kernel-analyzer 子 Agent + kernel-optimizer 子 Agent, 多轮迭代)
 Phase 5: 输出报告
 Phase 6: 会话导出          (session.jsonl + session.md)
 ```
@@ -46,7 +46,17 @@ Phase 6: 会话导出          (session.jsonl + session.md)
 
 ## Phase 0: 参数确认
 
-从用户输入中提取硬件架构 `arch`。若用户未明确指定，通过 `npu-smi info` 自动检测。若检测失败，使用默认值 `ascend910b1`。
+从用户输入中提取以下参数：
+
+- **`arch`**：硬件架构。若用户未指定，通过 `npu-smi info` 自动检测；若检测失败，使用默认值 `ascend910b1`。
+- **`npu`**：NPU 设备 ID。若用户未指定，使用默认值 `0`。
+
+提取后，立即设置运行时环境变量：
+```bash
+export ASCEND_RT_VISIBLE_DEVICES=${npu}
+```
+
+`arch` 和 `npu` 是全局上下文，后续所有 Phase 中调用子 Agent 时都必须传递。
 
 ### GPU Kernel 模式自动检测
 
@@ -66,8 +76,7 @@ Phase 6: 会话导出          (session.jsonl + session.md)
   - 否则，从描述文件所在目录开始**向上级目录递归查找** `vllm_gpu_perf.csv`（最多向上 3 级）
   - 找不到 → 告警并在报告中注明"未找到 GPU 性能基线"
 
-### 工作目录创建
-
+创建工作目录：
 ```
 ${pwd}/triton_ascend_output/op_{op_index}_{op_name}_{YYYYMMDD_HHMM}_{4位随机数}/
 ```
@@ -75,6 +84,11 @@ ${pwd}/triton_ascend_output/op_{op_index}_{op_name}_{YYYYMMDD_HHMM}_{4位随机�
 ⚠️ 时间戳和随机数**必须**通过 bash 工具获取：
 ```bash
 python3 -c "import datetime,random; ts=datetime.datetime.now().strftime('%Y%m%d_%H%M'); rid=random.randint(1000,9999); print(f'{ts}_{rid}')"
+```
+
+创建工作目录后，**必须**立即初始化 `output/` 子目录：
+```bash
+mkdir -p {工作目录}/output
 ```
 
 ---
@@ -129,7 +143,6 @@ python3 -c "import datetime,random; ts=datetime.datetime.now().strftime('%Y%m%d_
    - 验证通过后进入 Phase 2
 
 验证通过后直接进入 Phase 2。
-
 ---
 
 ## Phase 2: 算法设计
@@ -164,56 +177,62 @@ conductor_suggestion = ""
 ```
 while iteration < max_iterations:
 
+    iter_dir = {工作目录}/output/iter_{iteration}
+    generated_code_path = iter_dir/generated_code.py
+    verify_dir = iter_dir/verify
+    perf_output_path = iter_dir/perf_result.json
+
+    mkdir -p iter_dir
+    mkdir -p verify_dir
+
     ── 3.1 代码生成 ──────────────────────────────────
-    调用 kernel-generator skill
+    调用 kernel-generator 子 Agent，传入当前迭代所需上下文：
+      - 运行时上下文：npu
+      - 基础上下文：op_name, task_desc, arch, output_path
+      - 首轮上下文：sketch, user_requirements
+      - 重试上下文：previous_code, verifier_error, conductor_suggestion
 
-    首次 (iteration == 0):
-      传入: op_name, task_desc, arch, sketch, user_requirements
-    重试 (iteration > 0):
-      传入: 上述 + previous_code + verifier_error + conductor_suggestion
+    要求：
+      - kernel-generator 子 Agent 负责输入校验、调用对应 skill，并将完整代码写入 generated_code_path
 
-    产物 → {工作目录}/output/iter_{iteration}/generated_code.py
-
-    ── 3.2 AST 预检查 ────────────────────────────────
-    执行 validate_triton_impl.py 检测 PyTorch 退化
-
-    退化 (exit code != 0):
-      verifier_error = "A-PyTorchFallback-Type{N}: ..."
+    若 generated_code_path 未生成:
+      verifier_error = "A-GenerationFailed: 子 Agent 未产出代码文件"
       → 跳到 3.4 Conductor
 
-    通过 (exit code == 0):
+    ── 3.2 标准验证 ──────────────────────────────────
+    调用 kernel-verifier 子 Agent，以标准 verify 模式完成正确性门禁。
+
+    要求：
+      - 必须传入 npu，verifier 负责确保在正确设备上执行
+      - verifier 负责参数校验、标准验证目录准备和标准验证流程执行
+
+    验证通过:
+      将 generated_code_path 晋升为 {工作目录}/output/generated_code.py
+      previous_code = generated_code_path 的完整内容
       → 继续 3.3
 
-    ── 3.3 功能验证 ──────────────────────────────────
-    调用 kernel-verifier skill (verify.py)
-
-    在 {工作目录}/output/iter_{iteration}/verify/ 下创建:
-      - {op_name}_torch.py               (来自任务文件)
-      - {op_name}_triton_ascend_impl.py   (来自生成代码)
-
-    **多 shape 全量执行**：verify.py 会为每个 shape 独立 try/except，
-    全部跑完后落盘 verify_result.json（位于 verify_dir 下），包含：
-      - total_cases / passed_cases / failed_cases
-      - failures: 只列失败用例 [{case_idx, input_desc, error_type, error_msg(截断2000)}]
-    退出码：passed_cases == total_cases → 0；否则 → 1（策略 A：严格）。
-
-    **判定来源（强制）**：agent 必须打开 verify_result.json 读取数值字段
-    `passed_cases` 和 `total_cases` 做相等比较，**禁止**仅依赖 console 输出
-    文字、退出码或日志片段自行推断。多 shape 场景下"大部分通过"不等于通过。
-
-    验证通过 (verify_result.json 中 passed_cases == total_cases 且 total_cases > 0):
-      复制 iter_{iteration}/generated_code.py → {工作目录}/output/generated_code.py
-      记录 phase3_last_iter = iteration  # 供 Phase 4 复用基线结果
-      → 跳到 3.5 性能测试
-
-    验证失败 (passed_cases < total_cases 或 total_cases == 0 或 exit 非 0):
+    验证失败:
+      verifier_error = kernel-verifier 子 Agent 返回的原始错误输出
+      previous_code = generated_code_path 的完整内容
       删除 {工作目录}/output/generated_code.py（如存在）
-      从 verify_result.json 读取 **全部 failures**，汇总为 verifier_error
-      → 跳到 3.4 Conductor（Conductor 收到所有失败 shape 的错误清单，不只是第一个）
+      → 跳到 3.4 Conductor
 
-    **GPU Kernel 模式下的特殊处理**：
-    - 若 `Model` 为首选方案（直接返回 `gpu_output`），`verify.py` 的精度比对天然通过，但 `framework` 延迟不具备实际意义，应在报告中明确标注。
-    - 若 `Model` 为兜底方案（手写的 PyTorch 参考实现），正常走 `verify.py` 的精度比对流程。
+    ── 3.3 标准性能测试 ──────────────────────────────
+    调用 kernel-verifier 子 Agent，以标准 benchmark 模式完成性能评测。
+
+    要求：
+      - 必须传入 npu，verifier 负责确保在正确设备上执行
+      - benchmark 默认配置由 verifier 执行层负责
+      - verifier 必须写出 perf_output_path
+
+    benchmark 成功:
+      将 perf_output_path 晋升为 {工作目录}/output/perf_result.json
+      记录 perf_data，break
+
+    benchmark 失败:
+      verifier_error = "B-BenchmarkFailed: benchmark.py 执行失败"
+      删除 {工作目录}/output/generated_code.py（如存在）
+      → 跳到 3.4 Conductor
 
     ── 3.4 Conductor 分析与决策 ──────────────────────
     (Agent 自身推理，非 Skill 调用)
@@ -233,42 +252,6 @@ while iteration < max_iterations:
         → 保存日志到 iter_{iteration}/log.md
         → iteration++
         → continue
-
-    ── 3.5 性能测试 ──────────────────────────────────
-    **前置断言（强制）**：进入本步骤前重新读取 verify_result.json，再次确认
-    `passed_cases == total_cases > 0`。任何不符立即返回 3.4，不得调用 benchmark.py。
-
-    **L1 兜底**：benchmark.py 默认开启 verify 闸门，若 agent 误判越过前置断言，
-    benchmark.py 会以 **exit 2** 拒绝运行（stderr 打印 verify_json 路径 + passed/total
-    + failures 摘要）。处理方式：
-      - 视为等价于 3.3 verify 失败
-      - 重新读 iter_{iteration}/verify/verify_result.json 取 failures 汇总成 verifier_error
-      - 在 iter_{iteration}/log.md 标注 "L1 兜底触发：agent 越过 3.3 闸门"
-      - 删除 {工作目录}/output/generated_code.py（如存在）
-      - → 跳到 3.4 Conductor
-
-    调用 kernel-verifier skill (benchmark.py)
-
-    **GPU Kernel 模式**：需附加 `--skip_framework --framework_latency_ms <gpu_reference_ms>`，其中 `gpu_reference_ms` 由 `vllm_gpu_perf.csv` 中的 `Duration(us)` 转换而来（除以 1000）。避免对无意义的预存 GPU 输出 Model 进行 profiling。
-
-    产物 → {工作目录}/output/iter_{iteration}/perf_result.json
-    复制 → {工作目录}/output/perf_result.json
-
-    **多 shape 全量执行 + 几何平均聚合**：
-    - benchmark.py 为每个 shape 独立 try/except，全部跑完后写 JSON；exit 恒为 0（除非脚本崩溃）。
-    - 顶层汇总字段：
-      - `total_cases` / `passed_cases` / `failed_cases`
-      - `nan_indices` / `inf_indices` / `zero_indices` / `negative_indices` / `none_indices`：异常 `s_i` 的 case_idx 列表（异常 shape 仍计入 `passed_cases`，但不进入几何平均）
-      - `framework.avg_latency_ms` / `implementation.avg_latency_ms`（各 shape 延时的算术平均，保留兼容语义）
-      - `speedup_vs_torch` = **几何平均** = `(∏ s_i)^(1/n)`（仅对 status=="pass" 且 `s_i` 为有限正数的 shape）；全部异常时为 `null`
-    - 明细字段 `per_shape_results[]` 保留全量（含失败用例），每项带 `status: "pass"|"fail"`、
-      通过时 `framework/implementation/speedup_vs_torch`（异常时为 null），失败时 `error_type/error_msg`。
-    - 报告输出时显示：顶部汇总（含通过率+几何平均加速比+异常索引）+ 每个 shape 明细表格（含 status 列）。
-    - 策略 A 下 Phase 3.5 由于前置条件保证 passed_cases == total_cases，因此 benchmark 不会混入失败 shape。
-
-    记录 perf_data（包含汇总指标和 shape 明细），break
-
-⚠️ Phase 3 验证通过后，**必须**进入 Phase 4 执行性能优化，**严禁**跳过。
 
 达到 max_iterations → 任务失败，输出失败报告，结束
 ```
@@ -323,163 +306,415 @@ while iteration < max_iterations:
 
 ⚠️ **Phase 4 是必须执行的阶段，禁止跳过。** Phase 3 验证通过后，无论性能数据如何，都必须进入 Phase 4 尝试优化。
 
+**阶段目标**：性能优化阶段的核心目标是使 Triton 实现达到 **1.0x speedup_vs_torch**（即 Triton 性能追平或超越 PyTorch 基线）。
+
+**进入条件判断**：
+- Phase 3 完成后立即检查 `speedup_vs_torch`
+  - 如果 `speedup_vs_torch >= 1.0` → **跳过 Phase 4**，直接进入 Phase 5
+  - 如果 `speedup_vs_torch < 1.0` → **进入 Phase 4** 进行性能优化
+
+**退出条件**：优化过程中一旦 `speedup_vs_torch >= 1.0`，立即停止优化并进入 Phase 5。
+
 ### 状态变量
 
 ```
-opt_iteration = 0
-best_code = ""
-best_speedup = 0.0
+opt_round = 0
+max_opt_rounds = 5
+best_code = Phase 3 产出的 generated_code.py
+best_perf = Phase 3 产出的 perf_result.json
 baseline_code = Phase 3 产出的 generated_code.py
-phase3_last_iter = Phase 3 最后一次验证通过的 iter 编号  # 见 3.3 的记录
-improvement_made = false
+baseline_perf = Phase 3 产出的 perf_result.json
+todo_optim_path = {工作目录}/output/todo-optim.json
+phase4_success = false
+optimization_history = []
 ```
 
-### Phase 4 入口硬断言（强制）
+### Phase 4 主流程
 
-在执行 4.1 之前，必须打开 `{工作目录}/output/iter_{phase3_last_iter}/verify/verify_result.json`
-读取数值字段，确认 `passed_cases == total_cases > 0`。
+**核心原则：每一轮优化前后都必须调用 kernel-analyzer，单次调用必须完成"分析代码 + 更新 todo-optim.json"**
 
-- 断言通过 → 正常进入 4.1
-- 断言失败 → **C 类终止整个任务**。此时意味着 Phase 3 的闸门被违反但流程仍走到了
-  Phase 4，这是流程级 bug，禁止继续优化也禁止退回 Phase 3（退回只会再次误判）。
-  写 summary.json：
-    ```json
+```
+opt_round = 0
+
+── 4.0 进入条件判断（必须执行）─────────────────────────────
+读取 {工作目录}/output/perf_result.json：
+  - 如果 speedup_vs_torch >= 1.0：
+    → 记录"Phase 3 性能已达标，跳过 Phase 4"
+    → 直接进入 Phase 5
+  - 如果 speedup_vs_torch < 1.0：
+    → 继续 4.1（进入性能优化）
+
+── 4.1 首次分析（必须执行）────────────────────────────────
+【强制】调用 kernel-analyzer 子 Agent：
+  - 输入：code_file_path, todo_optim_path, optim_history_path, npu, arch
+  - kernel-analyzer 单次调用必须完成：
+    1. 分析 code_file_path 的代码，识别优化点
+    2. 结合历史经验排序优化点
+    3. 创建 todo-optim.json 并写入所有优化点
+【验证】确认 todo-optim.json 已创建且格式正确
+如果验证失败 → 重新调用 kernel-analyzer（最多 2 次）
+
+while opt_round < max_opt_rounds:
+
+    ── 4.2 检查优化点 ─────────────────────────────────────
+    读取 todo_optim_path：
+      - 如果 optimization_points 数组为空 → 跳到 4.9（退出优化）
+      - 如果有优化点 → 继续 4.3
+
+    ── 4.3 解析优化点 ─────────────────────────────────────
+    从 todo_optim_path 读取优化点列表，取第一个作为本轮目标
+
+    ── 4.4 创建优化轮次目录 ────────────────────────────────
+    round_dir = {工作目录}/output/opt_round_{opt_round}
+    mkdir -p round_dir
+
+    ── 4.5 执行单点优化 ────────────────────────────────────
+    调用 kernel-optimizer 子 Agent：
+      - input_code_path = best_code
+      - optimization_point = 本轮目标优化点
+      - output_code_path = round_dir/optimized_code.py
+      - verify_dir = round_dir/verify
+
+    kernel-optimizer 负责：
+      1. 读取 input_code_path 的代码
+      2. 应用 optimization_point 描述的优化
+      3. 生成优化后的代码并写入 output_code_path
+      4. 测试优化后代码的性能
+      5. 返回优化结果
+
+    ── 4.6 结果判定 ───────────────────────────────────────
+    if optimization_point == "无优化点":
+      → 记录并跳到 4.9
+
+    if 验证通过且有性能提升:
+      → best_code = round_dir/optimized_code.py 内容
+      → 更新 best_perf
+      → phase4_success = true
+      → optimization_history.append({轮次, 优化点, 性能})
+      → 记录相比优化前的加速比
+      → optimization_result = {status: "success", speedup: xxx}
+      【关键】比较本轮优化结果与 output/ 中现有最优结果：
+        - 如果 output/perf_result.json 不存在 → 直接将本轮结果晋升到 output/
+        - 如果本轮 optimized_latency_ms < output/perf_result.json 中的最优 latency → 将本轮代码和性能结果覆盖更新到 output/
+      【⚠️ 晋升时必须同时更新两个文件，缺一不可】：
+        1. cp {round_dir}/optimized_code.py → {工作目录}/output/generated_code.py
+        2. 根据 kernel-optimizer 返回的 performance 数据，构造并写入 {工作目录}/output/perf_result.json
+           （注意：kernel-optimizer 不直接产出 perf_result.json，需主 Agent 从返回值中提取构造）
+        两个文件必须同步更新，禁止只更新其中一个。
+
+    if 验证失败或性能劣化:
+      → 记录错误
+      → best_code 保持不变
+      → optimization_result = {status: "failed", reason: xxx}
+
+    ── 4.7 优化成功后立即检查性能达标 ─────────────────────
+    if 优化成功（验证通过且有性能提升）:
+      → 读取本轮性能结果中的 speedup_vs_torch
+      → 如果 speedup_vs_torch >= 1.0（即 Triton 性能已达到或超过 PyTorch 基线）:
+        → 记录"性能达标，提前退出优化阶段"
+        → 【关键】将本轮最优结果晋升到 output/（如果尚未晋升）
+          1. cp {round_dir}/optimized_code.py → {工作目录}/output/generated_code.py
+          2. 根据 kernel-optimizer 返回的 performance 数据，构造并写入 {工作目录}/output/perf_result.json
+        → 准备 optimization_result 传递给 kernel-analyzer
+        → 直接进入 Phase 5
+
+    ── 4.8 更新 todo-optim.json（必须执行）────────────────
+    opt_round++
+    【强制】调用 kernel-analyzer 子 Agent：
+      - 输入：
+        · code_file_path = best_code（最新优化后的代码）
+        · todo_optim_path = todo-optim.json 路径
+        · optim_history_path = {工作目录}/output/optim_history.json
+        · npu = NPU设备ID
+        · arch = 硬件架构
+        · optimization_result = 本轮优化结果
+    【重要】kernel-analyzer 单次调用必须完成：
+      1. 根据 optimization_result 移除已完成/失败的优化点
+      2. 结合历史经验排序优化点
+      3. 重新分析 best_code，识别新的优化机会
+      4. 将结果写入 todo-optim.json（一次性完成）
+    【验证】确认 todo-optim.json 已更新且格式正确
+    如果验证失败 → 重新调用 kernel-analyzer（最多 2 次）
+
+    返回 4.1 继续下一轮
+
+    ── 4.9 退出优化阶段 ─────────────────────────────────────
+    【性能达标退出条件】如果当前 speedup_vs_torch >= 1.0（即 Triton 性能已达到或超过 PyTorch 基线）：
+      → 记录性能达标
+      → 进入 Phase 5
+
+    否则从 optimization_history 中选择最优结果作为最终结果
+    进入 Phase 5
+```
+
+⚠️ **强制调用规则**
+
+- **每一轮优化前后都必须调用 kernel-analyzer**
+  - 4.0：单次调用 = 分析 + 创建 todo-optim.json
+  - 4.7：单次调用 = 分析 + 更新 todo-optim.json
+- **禁止跳过 kernel-analyzer 调用**
+- **单次调用内不能拆分分析和写入操作** - 必须一次性完成
+- **验证机制**：每次调用后必须验证 todo-optim.json 被正确创建/更新
+
+⚠️ **重要约束：todo-optim.json 的管理权限**
+
+- **禁止主 Agent 直接修改 todo-optim.json**
+- 只有 `kernel-analyzer` 子 Agent 有权创建和更新 todo-optim.json
+- 主 Agent 只能将优化结果传递给 kernel-analyzer，由其决定如何更新
+- kernel-analyzer 根据优化结果移除已完成或失败的优化点
+
+### 详细流程
+
+详细流程与上方主流程一致，步骤编号对应关系如下：
+
+| 主流程步骤 | 详细流程步骤 | 说明 |
+|-----------|-------------|------|
+| 4.0 | 4.1 | 进入条件判断 |
+| 4.1 | 4.2 | 首次分析 |
+| 4.2 | 4.3 | 检查优化点 |
+| 4.3 | 4.4 | 解析优化点 |
+| 4.4 | 4.5 | 创建优化轮次目录 |
+| 4.5 | 4.6 | 执行单点优化 |
+| 4.6 | 4.7 | 结果判定 |
+| 4.7 | 4.8 | 性能达标检查 |
+| 4.8 | 4.9 | 更新 todo-optim.json |
+| 4.9 | 4.10 | 退出优化阶段 |
+
+#### 4.1 进入条件判断（对应 4.0）
+
+读取 `{工作目录}/output/perf_result.json`，检查 `speedup_vs_torch`：
+- 如果 `speedup_vs_torch >= 1.0`：
+  → 记录"Phase 3 性能已达标，跳过 Phase 4"
+  → 直接进入 Phase 5
+- 如果 `speedup_vs_torch < 1.0`：
+  → 继续 4.2（进入性能优化）
+
+#### 4.2 首次分析（对应 4.1）
+
+调用 `kernel-analyzer` 子 Agent：
+
+```
+输入：
+  - npu: NPU设备ID
+  - code_file_path: Phase 3 的 generated_code.py
+  - todo_optim_path: todo-optim.json输出路径
+  - optim_history_path: {工作目录}/output/optim_history.json
+  - arch: 硬件架构
+
+输出：
+  - todo-optim.json文件（创建，包含识别出的所有可优化点，按优化潜力排序）
+```
+
+#### 4.3 检查优化点（对应 4.2）
+
+读取 `todo_optim_path` 文件内容：
+- 如果 `optimization_points` 数组为空 → 跳到 4.10（退出优化）
+- 如果有优化点 → 继续 4.4
+
+#### 4.4 解析优化点（对应 4.3）
+
+从 `todo_optim_path` 解析优化点列表，格式示例：
+```json
+{
+  "optimization_points": [
     {
-      "success": false,
-      "gen_iterations": <...>,
-      "failure_phase": "phase3_gate_violation",
-      "failure_reason": "Phase 3 verify_result.json passed_cases(<x>) < total_cases(<y>)，但流程已进入 Phase 4",
-      "last_error": "<failures 列表摘要>"
+      "id": 1,
+      "dimension": "入参静态化",
+      "description": "stride_am 等参数未声明为 tl.constexpr",
+      "suggestion": "将 stride_am, stride_an 等固定参数声明为 tl.constexpr"
+    },
+    {
+      "id": 2,
+      "dimension": "Tiling策略",
+      "description": "tl.arange 作用于非连续轴",
+      "suggestion": "调整 tiling 策略，使向量化访存作用于连续轴"
     }
-    ```
-
-### 迭代循环
-
-```
-while True:
-
-    ── 4.1 代码分析 + 优化策略 + 代码重写 ────────────
-    调用 latency-optimizer skill
-
-    latency-optimizer 报告无更多优化点:
-      → 终止优化，进入 4.6 终局判定
-
-    根据优化点进行代码优化重写
-    产物 → {工作目录}/output/opt_iter_{opt_iteration}/optimized_code.py
-
-    checklist 检查:
-      读取latency-optimizer skill 中的references\checklist.md，获取代码规范 checklist
-      验证 optimized_code.py 是否满足所有代码规范
-      不满足 → 修改代码直至满足规范 → 重新检查
-      满足 → 进入 4.2 双重验证
-    
-    复制 → {工作目录}/output/optimized_code.py
-
-    ── 4.2 精度验证（基线复用 + 优化侧单次执行）──────
-    调用 kernel-verifier skill 执行一次精度比对
-
-    在 {工作目录}/output/opt_iter_{opt_iteration}/verify/ 下创建:
-      - {op_name}_torch.py              (PyTorch 参考)
-      - {op_name}_triton_baseline.py    (Phase 3 基线，保留以便复盘)
-      - {op_name}_triton_optimized.py   (优化后)
-
-    基线侧：直接复制 Phase 3 iter_{phase3_last_iter} 的校验结果，不再重跑
-      cp {工作目录}/output/iter_{phase3_last_iter}/verify/verify_result.json \
-         {工作目录}/output/opt_iter_{opt_iteration}/verify/verify_result_baseline.json
-
-      ⚠️ 基线代码等于 Phase 3 产出的 generated_code.py，Phase 3.3 已经严格校验
-      过 passed == total，无需在 Phase 4 重复执行 verify.py。
-      verify_result_baseline.json 内容中不含 triton 实现模块名字段，原样复制即可。
-
-    优化侧：verify.py --triton_impl_name triton_optimized → verify_result_optimized.json
-
-    **策略 A 判定**：
-      baseline 视为已通过（来自 Phase 3，已确认 passed == total）
-      optimized 要求 `passed_cases == total_cases`
-      optimized 全过 → 继续 4.3
-      optimized 未全过 → 跳到 4.5（A 类，读取 verify_result_optimized.json 的 failures 供优化器分析）
-
-    ── 4.3 性能测试（基线复用 + 优化侧单次执行）──────
-    **前置断言（强制）**：进入本步骤前重新读取 verify_result_optimized.json，
-    确认 `passed_cases == total_cases > 0`。任何不符立即跳到 4.5（A 类），不得调用 benchmark.py。
-    （baseline 侧不需要校验：verify_result_baseline.json 是从 Phase 3 复制而来，
-    Phase 4 入口硬断言已确保其全过；且 baseline 的 benchmark 也不再执行。）
-
-    **L1 兜底**：benchmark.py 默认开启 verify 闸门。若 agent 误判越过断言，
-    optimized benchmark 会以 **exit 2** 拒绝（按 impl_name 查 verify_result_optimized.json）。
-    处理方式：
-      - 视为等价于 4.2 optimized verify 失败
-      - 重新读 verify_result_optimized.json 取 failures 汇总成错误信息
-      - 在 opt_iter_{opt_iteration}/log.md 标注 "L1 兜底触发：agent 越过 4.3 断言"
-      - → 跳到 4.5（A 类）
-
-    调用 kernel-verifier skill (benchmark.py) 一次，仅测试优化侧
-
-    基线侧：直接复制 Phase 3 iter_{phase3_last_iter} 的性能结果，不再重跑
-      cp {工作目录}/output/iter_{phase3_last_iter}/perf_result.json \
-         {工作目录}/output/opt_iter_{opt_iteration}/baseline_perf_result.json
-
-      ⚠️ 基线代码等于 Phase 3 产出的 generated_code.py，Phase 3.5 已完成过完整
-      benchmark，再跑一次只会得到等价结果并消耗时间。perf_result.json 内容中不含
-      `triton_impl_name` 字段，原样复制即可；下游判定仅依赖 `speedup_vs_torch`
-      （几何平均加速比），不关心文件名前缀。
-
-    **GPU Kernel 模式**：优化侧 benchmark 仍需附加 `--skip_framework --framework_latency_ms <gpu_reference_ms>`，其中 `gpu_reference_ms` 从 `vllm_gpu_perf.csv` 读取并转换为毫秒。非 GPU 模式保持原样。基线侧因为是复制 Phase 3 结果，天然继承 Phase 3 时的参数配置，无需额外处理。
-
-    优化侧: benchmark.py --triton_impl_name triton_optimized [--skip_framework ...]
-      → optimized_perf_result.json
-
-    **几何平均加速比判定（geomean ratio）**：
-    从 perf_result.json 读取 `speedup_vs_torch`，即各通过 shape 加速比的几何平均
-    （异常 shape 不计入）。直接对比 Phase 3 与 Phase 4 的几何平均加速比：
-
-    ```
-    baseline_speedup  = baseline_data["speedup_vs_torch"]   # Phase 3 几何平均
-    optimized_speedup = optimized_data["speedup_vs_torch"]  # Phase 4 几何平均
-    ```
-
-    策略 A 下 4.2 已保证 optimized 侧 passed == total，baseline 来自 Phase 3 同样 passed == total，
-    集合相同，可直接对比。若出现集合不一致（兼容路径），应直接判优化失败，不写入比较数值。
-    
-    ── 4.4 结果判定 ──────────────────────────────────
-    **前置检查**：
-    - 若 `opt_iter_{opt_iteration}/optimized_perf_result.json` 不存在或读取失败
-      （通常意味着 4.3 被 L1 拒绝、benchmark 未实际产出 JSON），跳过本步骤直接
-      进入 4.5（A 类分析），不得写入任何 speedup 数值。
-    - 若 `baseline_speedup` 或 `optimized_speedup` 任一为 `null`（全部 shape 异常，
-      无几何平均可算），直接判定为优化失败（拒绝优化），跳到 4.5 A 类分析。
-
-    optimized_speedup > baseline_speedup:
-      → 优化成功（几何平均加速比有提升）
-      → 更新 best_code / best_speedup
-      → improvement_made = true
-      → opt_iteration++，continue
-
-    否则（含相等）:
-      → 视为无提升，opt_iteration++，continue
-
-    ── 4.5 分析决策 (验证失败时) ─────────────────────
-    A 类 (优化引入逻辑错误) → 回退，调整策略，continue
-    B 类 (环境错误) → 终止
-    C 类 (无法继续) → 终止
-
-    opt_iteration++
-    continue
-
-    ── 4.6 终局判定 ──────────────────────────────────
-    无优化点时退出判定：
-
-    improvement_made == true:
-      → 优化成功，break，进入 Phase 5
-
-    improvement_made == false:
-      → 优化失败（做完所有尝试后没有效果），break，进入 Phase 5
+  ]
+}
 ```
 
-### Phase 4 终局处理
+取数组中第一个优化点作为本轮执行目标。
 
-- Phase 4 优化成功（improvement_made == true）→ 以 `optimized_code.py` 为最终结果
-- Phase 4 优化失败（improvement_made == false，做完所有尝试后没有效果）→ 以 Phase 3 的 `generated_code.py` 为最终结果
+#### 4.5 创建优化轮次目录（对应 4.4）
+
+```bash
+round_dir={工作目录}/output/opt_round_{opt_round}
+mkdir -p {round_dir}
+mkdir -p {round_dir}/verify
+```
+
+#### 4.6 执行单点优化（对应 4.5）
+
+调用 `kernel-optimizer` 子 Agent：
+
+```
+输入：
+  - npu: NPU设备ID
+  - op_name: 算子名称
+  - task_file_path: 任务描述文件路径
+  - input_code_path: 当前best_code路径
+  - optimization_point: 本轮目标优化点（从todo-optim.json解析）
+  - output_code_path: round_dir/optimized_code.py
+  - verify_dir: round_dir/verify
+  - output_dir: {工作目录}/output
+  - arch: 硬件架构
+
+kernel-optimizer 返回：
+{
+  "success": true/false,
+  "output_code_path": "优化后代码路径",
+  "performance": {
+    "baseline_latency_ms": <优化前延迟>,
+    "optimized_latency_ms": <优化后延迟>,
+    "speedup": <加速比>,
+    "improvement_percent": "<提升百分比>%"
+  },
+  "optimization_point": "执行的优化点",
+  "verification_passed": true/false,
+  "verify_dir": "验证目录路径"
+}
+```
+
+#### 4.7 结果判定（对应 4.6）
+
+```
+if kernel-optimizer 返回 success == true:
+  → 优化成功
+  → best_code = round_dir/optimized_code.py 完整内容
+  → 更新 best_perf 为返回的 performance
+  → phase4_success = true
+  → optimization_history.append({
+      "round": opt_round,
+      "optimization_point": <优化点名称>,
+      "performance": <performance数据>,
+      "code_path": round_dir/optimized_code.py
+    })
+  【关键】比较本轮优化结果与 output/ 中现有最优结果：
+    - 如果 output/perf_result.json 不存在 → 直接将本轮结果晋升到 output/
+    - 如果本轮 optimized_latency_ms < output/perf_result.json 中的最优 latency → 将本轮代码和性能结果覆盖更新到 output/
+```
+
+#### 4.8 性能达标检查（对应 4.7）
+
+【性能达标提前退出条件】如果本轮优化成功：
+  → 读取本轮性能结果中的 speedup_vs_torch
+  → 如果 speedup_vs_torch >= 1.0（即 Triton 性能已达到或超过 PyTorch 基线）:
+    → 记录"性能达标，提前退出优化阶段"
+    → 【关键】将本轮最优结果晋升到 output/（如果尚未晋升）
+      1. cp {round_dir}/optimized_code.py → {工作目录}/output/generated_code.py
+      2. 根据 kernel-optimizer 返回的 performance 数据，构造并写入 {工作目录}/output/perf_result.json
+    → 准备 optimization_result 传递给 kernel-analyzer
+    → 直接进入 Phase 5
+
+#### 4.10 更新 todo-optim.json（对应 4.8）
+
+调用 `kernel-analyzer` 子 Agent：
+```
+输入：
+  - npu: NPU设备ID
+  - code_file_path: 最新优化后的代码
+  - todo_optim_path: todo-optim.json路径
+  - optim_history_path: {工作目录}/output/optim_history.json
+  - arch: 硬件架构
+  - optimization_result: 本轮优化结果
+    {
+      "optimization_point": "<id>: <dimension>",
+      "status": "success" | "failed",
+      "speedup": <加速比，仅 success 时>,
+      "reason": <失败原因，仅 failed 时>
+    }
+
+kernel-analyzer 必须完成以下操作：
+  1. 根据 optimization_result 移除已完成或失败的优化点
+  2. 结合历史经验排序优化点
+  3. 重新分析代码，识别新的优化机会
+  4. 将更新后的 optimization_points 写入 todo-optim.json
+
+输出：
+  - todo-optim.json文件（更新，移除已处理优化点，添加新识别的优化点，按优化潜力排序）
+```
+
+#### 4.10 退出优化阶段（对应 4.9）
+
+【性能达标退出条件】如果当前 speedup_vs_torch >= 1.0（即 Triton 性能已达到或超过 PyTorch 基线）：
+  → 记录性能达标
+  → 进入 Phase 5
+
+满足以下任一条件即退出优化阶段：
+1. `speedup_vs_torch >= 1.0`（Triton 性能达到 PyTorch 基线）
+2. `todo-optim.json` 为空（无更多优化点）
+3. 达到 max_opt_rounds（默认 5 轮）
+4. 连续失败达到 3 次
+
+→ 记录加速比：speedup = best_perf.speedup
+  → 准备 optimization_result 传递给 kernel-analyzer：
+    {
+      "optimization_point": <优化点序号和名称>,
+      "status": "success",
+      "speedup": <加速比，如 1.25 表示性能提升 25%>
+    }
+
+elif kernel-optimizer 返回 verification_passed == false:
+  → 验证失败
+  → 记录错误到 round_dir/log.md
+  → best_code 保持不变
+  → best_perf 保持不变
+  → 记录失败原因：kernel-optimizer 返回的 error 信息
+  → 准备 optimization_result 传递给 kernel-analyzer：
+    {
+      "optimization_point": <优化点序号和名称>,
+      "status": "failed",
+      "reason": <失败原因>
+    }
+
+else:
+  → 优化执行失败或性能劣化
+  → 记录错误到 round_dir/log.md
+  → best_code 保持不变
+  → best_perf 保持不变
+  → 若有性能数据，记录劣化加速比；若无，记录失败原因
+  → 准备 optimization_result 传递给 kernel-analyzer：
+    {
+      "optimization_point": <优化点序号和名称>,
+      "status": "failed",
+      "reason": <失败原因或性能劣化说明>
+    }
+```
+
+### Phase 4 目录结构
+
+```
+{工作目录}/output/
+├── generated_code.py                 # Phase 3 最终代码
+├── perf_result.json                  # Phase 3 性能数据
+├── todo-optim.json                    # 当前优化点清单（动态更新）
+├── opt_round_0/                      # 第0轮优化
+│   ├── optimized_code.py             # 优化后代码
+│   ├── verify/
+│   │   ├── {op_name}_torch.py        # PyTorch 参考实现
+│   │   ├── {op_name}_triton_baseline.py   # 基线 Triton 版本（本轮优化前的代码）
+│   │   └── {op_name}_triton_optimized.py  # 优化后 Triton 版本
+│   ├── perf_result.json             # 本轮性能结果
+│   └── log.md                       # 本轮日志
+├── opt_round_1/                      # 第1轮优化
+│   └── ...
+├── opt_round_2/                      # 第2轮优化
+│   └── ...
+└── ...
+```
+
+### Phase 4 完成条件
+
+满足以下任一条件即退出优化阶段：
+1. `speedup_vs_torch >= 1.0`（Triton 性能达到 PyTorch 基线）
+2. `todo-optim.json` 为空（无更多优化点）
+3. 达到 `max_opt_rounds`（默认 5 轮）
+4. 优化点执行失败连续 3 次
+
+### Phase 4 失败处理
+
+- Phase 4 所有轮次都失败 → 以 Phase 3 的 `generated_code.py` 和性能数据为最终结果
+- Phase 4 有任何优化成功 → 以最优那次优化的代码为最终结果
 - 两种情况都进入 Phase 5
 
 ---
@@ -631,6 +866,26 @@ Phase 4 失败时（Phase 3 成功，优化未成功）：
   }
 }
 ```
+### 6 会话导出（session.jsonl + session.md）
+
+Phase 5 **最末尾**（`summary.json`、`report.md` 写完之后）执行，将当前 Claude Code 会话归档到工作目录，便于复盘。放在最末尾是为了最大化 jsonl 完整性——仍会缺失本步骤之后的极少量消息，可接受。
+
+并行批量执行（`run_benchmark_triton.sh --npu-list`）下，多个子进程共用同一个 `/root/.claude/projects/<hash>/` 目录，**必须用工作目录路径精确过滤**，禁止用时间排序（`ls -t | head -1` 会错拿到其它并发子进程的 jsonl）。
+
+```bash
+# 用工作目录绝对路径作为唯一标记定位自己的 session jsonl
+MY_JSONL=$(grep -l "{工作目录}" /root/.claude/projects/*/*.jsonl 2>/dev/null | head -1)
+if [ -n "$MY_JSONL" ]; then
+  cp "$MY_JSONL" {工作目录}/session.jsonl
+  python3 ./utils/render_session.py \
+    {工作目录}/session.jsonl {工作目录}/session.md 2>&1 || \
+    echo "WARN: session render failed (non-fatal)"
+else
+  echo "WARN: session jsonl not located (non-fatal)"
+fi
+```
+
+⚠️ 渲染失败 / 定位失败均不阻塞任务，仅告警。
 
 ## Phase 6: 会话导出（session.jsonl + session.md）
 
@@ -660,40 +915,31 @@ fi
 ```
 ${pwd}/triton_ascend_output/op_{op_name}_{timestamp}_{rid}/
 ├── {op_name}.py                          # Phase 1: KernelBench 任务描述
-├── {op_name}.json                        # Phase 1: 多 case 模式专属（与 .py 同名同目录）
 ├── sketch.txt                            # Phase 2: 算法草图
 ├── output/
-│   ├── generated_code.py                 # Phase 3 最终通过验证的代码（副本）
-│   ├── perf_result.json                  # Phase 3 最终性能报告（副本）
-│   ├── optimized_code.py                 # Phase 4 最终优化代码（副本，成功时）
+│   ├── generated_code.py                 # Phase 3 最终代码
+│   ├── perf_result.json                  # Phase 3 性能数据
+│   ├── todo-optim.json                   # 优化点清单
+│   ├── optim_history.json                 # 优化历史
 │   ├── iter_0/                           # Phase 3 第 0 轮
 │   │   ├── generated_code.py
 │   │   ├── verify/
 │   │   │   ├── {op_name}_torch.py
-│   │   │   ├── {op_name}_triton_ascend_impl.py
-│   │   │   └── verify_result.json         # 各 shape 通过 / 失败统计，失败清单
+│   │   │   └── {op_name}_triton_ascend_impl.py
 │   │   ├── perf_result.json
 │   │   └── log.md
-│   ├── iter_1/                           # Phase 3 第 1 轮（如有）
-│   │   └── ...
-│   ├── opt_iter_0/                       # Phase 4 第 0 轮
+│   ├── opt_round_0/                       # Phase 4 第 0 轮优化
 │   │   ├── optimized_code.py
 │   │   ├── verify/
 │   │   │   ├── {op_name}_torch.py
 │   │   │   ├── {op_name}_triton_baseline.py
-│   │   │   ├── {op_name}_triton_optimized.py
-│   │   │   ├── verify_result_baseline.json   # 复制自 iter_{phase3_last_iter}/verify/verify_result.json
-│   │   │   └── verify_result_optimized.json  # 本轮 verify.py 实际产出
-│   │   ├── baseline_perf_result.json         # 复制自 iter_{phase3_last_iter}/perf_result.json
-│   │   ├── optimized_perf_result.json        # 本轮 benchmark.py 实际产出
+│   │   │   └── {op_name}_triton_optimized.py
+│   │   ├── perf_result.json
 │   │   └── log.md
-│   └── opt_iter_1/                       # Phase 4 第 1 轮（如有）
-│       └── ...
+│   └── ...
 ├── {op_name}_generated.py                # Phase 5: 最终代码
 ├── summary.json                          # 执行摘要
 └── report.md                             # 最终报告
-├── session.jsonl                         # Phase 6: 当前 Claude Code 会话原始记录
-└── session.md                            # Phase 6: 会话 Markdown 渲染（渲染失败时可能缺失）
 ```
 
 ---
@@ -730,15 +976,15 @@ agent 收到 exit 2 时，必须按下表把它**等价映射**到对应 verify 
 | 约束 | 说明 |
 |------|------|
 | GPU Kernel 模式 | `.pt` 必须与 `.py` 同名同目录；`vllm_gpu_perf.csv` 向上查找最多 3 级 |
+| ⚠️ **禁止自行执行核心任务** | **代码生成、性能优化、精度验证、性能测试必须通过子 Agent 完成，禁止主 Agent 自行执行。违反此约束将导致任务失败。** |
+| ⚠️ **禁止修改 todo-optim.json** | **只有 kernel-analyzer 子 Agent 有权创建和更新该文件** |
 | Phase 3 最大迭代 | 5 次，禁止超出 |
-| Phase 4 迭代策略 | 不做最大迭代次数限制，直到 latency-optimizer 报告无更多优化点则退出 |
-| Phase 4 成功底线 | 性能不劣化（speedup_vs_baseline ≥ 1.0） |
-| Phase 4 退出判定 | 有效果（speedup_vs_baseline ≥ 1.0）则成功；做完所有尝试后无效果则失败 |
-| Phase 4 基线复用 | 4.2/4.3 的基线侧 verify_result_baseline.json 和 baseline_perf_result.json 必须从 Phase 3 iter_{phase3_last_iter} 复制，禁止对基线代码重跑 verify.py 或 benchmark.py（基线代码与 Phase 3 generated_code.py 完全一致，重复执行只浪费时间） |
+| Phase 4 最大轮次 | 5 轮 |
+| Phase 4 连续失败上限 | 3 次，连续失败达此数则终止优化 |
 | A 类连续上限 | 同一子类型连续 ≥ 3 次 → 自动终止 |
+| 优化点选择 | 每轮只选择一个优化点执行 |
 | 禁止 PyTorch 退化 | forward() 中禁止 torch.*/F.* 计算操作 |
 | 文件操作范围 | 限制在工作目录内 |
-| 验证方式 | 必须调用 kernel-verifier skill 的脚本，禁止自创测试 |
 | 语言 | 思考、分析、日志使用中文；代码、路径使用英文 |
 | 时间戳/随机数 | 必须通过 bash 获取，禁止 LLM 模拟 |
 

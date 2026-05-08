@@ -10,8 +10,7 @@
 
 1. **固定的 BLOCK_SIZE**：如 `BLOCK_M`、`BLOCK_N`、`BLOCK_K` 等
 2. **固定的 STRIDE**：如 `stride_m`、`stride_n` 等
-3. **模型配置超参数**：如 MoE 场景中的 `num_experts`、`topk_numel`、`seq_len` 等。这些值在模型训练/推理过程中通常是固定配置（如 `num_experts=128`），不应仅凭变量名判断为运行时变量。若该参数来自 Python 层的固定配置，应优先尝试声明为 `tl.constexpr`
-4. **其他在 kernel 生命周期内不会变化的常量参数**
+3. **其他在 kernel 生命周期内不会变化的常量参数**
 
 如果已有入参中的某个参数对性能影响很大，且在kernel生命周期内不会变化，如若不确定则应该**询问用户是否可以将该参数设置为 `tl.constexpr`**。
 

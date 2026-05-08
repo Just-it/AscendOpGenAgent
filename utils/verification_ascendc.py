@@ -463,6 +463,51 @@ def _get_input_groups(module):
         inputs = module.get_inputs()
         if not isinstance(inputs, list) or not inputs:
             raise ValueError("get_inputs() must return a non-empty list")
+        # Coverage diagnostic: if a sibling `<op>.json` JSONL exists with
+        # > 1 case, the single-case fallback is almost certainly a Path-A
+        # model.py that lost the case-iteration dimension. Surface a strong
+        # warning so the worker sees it inline (the orchestrator's coverage
+        # gate will block at finalize, but surfacing here saves a wasted
+        # spawn cycle). Best-effort — never break verification on diagnostic
+        # failure.
+        try:
+            module_path = Path(module.__file__).resolve()
+            module_dir = module_path.parent
+            op_name = module_dir.name
+            jsonl_candidates = [
+                module_dir / f"{op_name}.json",
+                module_dir / "model.json",
+            ]
+            for cand in jsonl_candidates:
+                if not cand.exists():
+                    continue
+                try:
+                    n_cases = sum(
+                        1 for ln in cand.read_text(
+                            encoding="utf-8", errors="replace"
+                        ).splitlines()
+                        if ln.strip()
+                    )
+                except OSError:
+                    continue
+                if n_cases > 1:
+                    import warnings as _w
+                    _w.warn(
+                        f"verification coverage diagnostic: model.py defines "
+                        f"only `get_inputs()` (single case) but {cand.name} "
+                        f"has {n_cases} JSONL cases. Verifier will report "
+                        f"total=1 — likely silent coverage fraud if the op's "
+                        f"contract requires multi-case verification. Fix: "
+                        f"define `get_input_groups()` in model.py that loads "
+                        f"{cand.name} and yields one input list per case "
+                        f"(see canonical NPUKernelBench Model.py templates "
+                        f"for the loader pattern).",
+                        UserWarning,
+                        stacklevel=3,
+                    )
+                    break
+        except Exception:
+            pass  # diagnostic only; never break verification
         return [inputs]
 
     raise AttributeError(f"Neither get_input_groups() nor get_inputs() found in {module.__file__}")

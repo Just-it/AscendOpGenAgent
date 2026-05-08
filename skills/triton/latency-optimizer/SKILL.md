@@ -407,9 +407,18 @@ kernel[grid](..., BLOCK_M=128, BLOCK_N=128)
 
 ---
 
+### 优化点 13：IR 分析优化
+
+**适用条件**：此步骤不可跳过，为强制执行步骤
+
+**参考文档**：`references/IR_triton.md`
+
+---
+
+
 ## 优化流程
 ```
-1. 按顺序检查优化点 1 → 2 → 3 → ... → 12
+1. 按顺序检查优化点 1 → 2 → 3 → ... → 13
 2. 对于当前优化点，先判断是否命中（代码特征满足 + 适用条件成立）：
    - 未命中 → 跳过，检查下一优化点
    - 命中 → 参考对应文档，应用优化策略
@@ -458,4 +467,5 @@ kernel[grid](..., BLOCK_M=128, BLOCK_N=128)
 | 循环不变量外提 | `references/loop-invariant-hoisting.md` |
 | Load 指令重排序 | `references/load-order.md` |
 | Autotune 自动调优 | `references/autotune.md` |
+| IR 分析优化 | `references/IR_triton.md` |
 | 代码规范检查 | `references/checklist.md` |

@@ -108,6 +108,7 @@ export ASCEND_RT_VISIBLE_DEVICES=${npu}
 - `output/perf_result.json`：Phase 3 性能结果
 - `opt_round_0/` 到 `opt_round_{当前轮次-1}/optimized_code.py`：之前各轮优化代码
 - `opt_round_0/` 到 `opt_round_{当前轮次-1}/perf_result.json`：之前各轮性能结果
+- `opt_round_0/` 到 `opt_round_{当前轮次-1}/log.md`：之前各轮日志（包含错误分析、失败原因等）
 
 将历史内容拼接到上下文中，供后续优化参考。
 

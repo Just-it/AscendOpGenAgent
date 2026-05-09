@@ -89,6 +89,7 @@ skills:
    - `generated_code.py`：每轮的生成代码
    - `perf_result.json`：每轮的验证结果
    - `verify/verify_result.json`：每轮的验证详情
+   - `log.md`：每轮的日志（包含错误分析、失败原因等）
    将历史内容拼接到上下文中，供后续代码生成参考。
 4. **直接调用 `kernel-generator` skill**（使用 `skill` 工具），把收到的字段原样传给它。
    - **不要**在调用 skill 之前读取任何参考文档
@@ -104,7 +105,7 @@ skills:
 
 **历史检索说明**：
 - 从 `output_path`（如 `{工作目录}/output/iter_1/generated_code.py`）解析出工作目录和当前轮次
-- 读取该轮次之前的所有 iter_* 目录下的历史文件
+- 读取该轮次之前的所有 iter_* 目录下的历史文件（generated_code.py、perf_result.json、verify/verify_result.json、log.md）
 - 历史文件将作为上下文传递给 skill，帮助其了解之前的尝试和失败原因
 
 ---

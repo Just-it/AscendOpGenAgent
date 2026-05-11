@@ -20,6 +20,7 @@ This guide focuses on that programming model and covers:
 ### 1.1 Programming Guidelines
 
 - Prefer `T.tile.*` APIs for compute whenever possible, and avoid scalar or element-by-element operations in hot paths.
+- **Do not use `T.min`, `T.max`, or similar tile-level APIs for scalar comparison.** These are tensor elementwise operations; for scalar min/max, use Python `min()`/`max()` (compile-time constants) or `T.if_then_else` (runtime variables).
 - Use `T.tile.broadcast` sparingly because it can consume large UB temporary space, and prefer row-wise or column-wise tile compute patterns when UB is constrained.
 - On the Vector side, in practice, you should copy inputs into UB and then cast them to `float32` at the beginning of `T.Scope("V")`, because this ensures better numerical stability and consistent behavior across the subsequent vector compute path.
 
@@ -100,6 +101,8 @@ Ordinary `if`, `else`, `while`, `break`, and `continue` can also be used in supp
 ## 3. On-Chip Memory
 
 Ascend kernels in this guide only use L1, UB, and L0 storage.
+
+**Important**: The shape argument passed to any `T.alloc_*` API (`alloc_L1`, `alloc_ub`, `alloc_L0A`, `alloc_L0B`, `alloc_L0C`) must be a **compile-time integer constant expression**. Runtime variables are not allowed and will cause `Extent must be an integer constant` at compile time. If the actual data size varies at runtime, allocate the maximum fixed size and control the valid region via `T.copy` slices or conditional branches.
 
 ### 3.1 `T.alloc_L1`
 

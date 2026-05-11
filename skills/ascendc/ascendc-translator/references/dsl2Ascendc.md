@@ -21,7 +21,7 @@
    提供调度、数据搬运、workspace 管理等通用能力。
 
 3. **Kernel 入口**：`xxx.cpp`
-   定义 `__global__ __aicore__` kernel 和 `extern "C"` launch 函数。
+   定义 `__global__ __aicore__` kernel 和 `extern "C"` launch 函数。每个 `.cpp` 文件只能有一个 kernel 入口；若需多个（如不同 dtype、tile 策略、任务类型），拆分为多个 `.cpp`，kernel 符号加统一前缀避免冲突。
 
 4. **主 Kernel 类与计算子模块**：一个或多个 `*.h`
    主 `Kernel` 类负责 `Init()` / `Process()` 主流程，管理 GM tensor、调度和流水。若 TileLang 中存在多个 `T.prim_func`，将对应的主 `Kernel` 类拆到多个独立头文件中，例如 `xxx_merge_n_kernel.h`、`xxx_single_row_kernel.h`。若算子属于 C/V 融合算子，或者 TileLang 设备侧存在多个有明确职责分工的 `Scope`，则可在这一部分下继续按计算阶段拆分子模块，例如 `matmul.h`、`leakyrelu.h`；通常每个 `Scope` 对应一个子模块，职责应与原 TileLang 设计中的计算阶段一一对应。对于纯 Vector 算子，或者虽然有 host / queue / buffer 管理但设备侧只有单个 Vector 计算阶段 / 单个 Vector `Scope` 的简单算子，主 `Kernel` 类本身通常就承载全部计算逻辑，不再额外拆分子模块。

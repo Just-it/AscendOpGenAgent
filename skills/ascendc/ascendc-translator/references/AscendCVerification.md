@@ -64,6 +64,14 @@ import _matmul_leakyrelu_ext as _ext
 
 ---
 
+### 验证失败排查思路
+
+编译通过但运行时失败，常见根因：
+
+**Kernel 注册失败** — 若日志中出现 `RegisterAscendBinary` 相关报错，检查 `kernel/` 下是否存在"一文件多 entry"或符号命名冲突。
+
+---
+
 ## 已知 NPU 精度问题与 Workaround
 
 ### 1. `torch.cumsum` float16 2D tensor `dim=0` 非确定性 bug

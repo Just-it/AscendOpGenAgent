@@ -37,6 +37,25 @@ argument-hint: >
 └── <other_tasks>/        # 其他历史任务，可作为参考实现
 ```
 
+## model_new_tilelang.py 导入规范
+
+为保证 `model_new_tilelang.py` 在本地 AST 退化检测和远端运行时都能正确解析 `design.tile_level` 下的 kernel builder，必须同时满足以下两点：
+
+1. **在 `model_new_tilelang.py` 顶部添加 `sys.path.insert`**，将 `{output_dir}` 加入 Python 路径：
+   ```python
+   import sys
+   import os
+   sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+   ```
+   然后再写 `from design.tile_level.xxx import yyy`。
+
+2. **创建 `__init__.py` 使 design 成为 Python 包**。在生成 block_level / tile_level 设计的同时，必须创建以下空文件（或仅含注释）：
+   - `{output_dir}/design/__init__.py`
+   - `{output_dir}/design/tile_level/__init__.py`
+   - `{output_dir}/design/block_level/__init__.py`（如 block_level 下也有被导入的模块）
+
+这两个措施缺一不可：`sys.path.insert` 解决 Python 路径问题；`__init__.py` 解决包识别问题。
+
 ## Skill 参考资料
 本 skill 提供以下参考资料（位于 `@references/` 目录）：
 - `@references/BlockLevelDesign.md` — Block 层级设计指南

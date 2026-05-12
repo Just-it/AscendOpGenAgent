@@ -44,6 +44,22 @@ Block-level design 用来确定 kernel 的块级组织方式，不展开具体�
 2. 若这种切分明显损失并行度或数据访问效率，可引入可控的跨 block 归并。
 3. 原始 layout 不利于分工时，可做轴合并、拆分或重排。
 
+### Vector 侧二级切分
+
+当一个逻辑 block 被分配到某个物理 AI Core 后，还应继续考虑该 core 内 2 个 Vector core 如何分工。推荐在 block-level 阶段就把这种二级切分写清楚：
+
+```python
+vec_num = 2
+sub_block_elems = block_elems // vec_num
+
+with T.Kernel(usedCoreNum, is_npu=True) as (cid, vid):
+    for localIdx in T.serial(tasksPerCore):
+        bx = cid * tasksPerCore + localIdx
+        elem_base = bx * block_elems + vid * sub_block_elems
+        # TODO(tile-level):
+        # - this Vector lane owns [elem_base, elem_base + sub_block_elems)
+```
+
 ### 例子一：Matmul
 
 - 输出：`C[M, N]`

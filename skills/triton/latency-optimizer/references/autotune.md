@@ -4,7 +4,7 @@
 
 Triton autotune 用于自动选择最优的 kernel 配置参数，主要包括影响分核（split）和切块（tiling）大小的参数，主要使用方式如下：
 
-**三种种使用方式：**
+**三种使用方式：**
 
 | 方式 | 说明 | 适用场景 |
 |------|------|---------|
@@ -114,8 +114,8 @@ triton.Config(
 | `kwargs` | ✅ | ✅ | 完全支持 |
 | `num_warps` | ✅ | ❌ | NPU 架构差异，不支持 |
 | `num_stages` | ✅ | ❌ | NPU 架构差异，不支持 |
-| `multibuffer` | ❌ | ✅ | NPU 特有，多缓冲优化 |
-| `unit_flag` | ❌ | ✅ | NPU 特有，独立计算单元 |
+| `multibuffer` | ❌ | ✅ | NPU 特有，多缓冲优化（通过 kwargs 传入） |
+| `unit_flag` | ❌ | ✅ | NPU 特有，独立计算单元（通过 kwargs 传入） |
 
 #### 使用示例
 
@@ -227,13 +227,19 @@ pid = tl.program_id(0)
 offs_m = pid * BLOCK_M + tl.arange(0, BLOCK_M)# 可以知道BLOCK_M 是 split 参数
 mask_m = offs_m < n_rows
 
-# 二维切分
-pid_m = tl.program_id(0)
-pid_n = tl.program_id(1)
-offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)[:, None]# 可以知道BLOCK_M 是 split 参数
-offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)[None, :]# 可以知道BLOCK_N 是 split 参数
-mask_m = offs_m < n_rows
-mask_n = offs_n < n_cols
+# 二维切分（Ascend NPU 必须使用一维 Grid，通过一维 pid 映射到二维坐标）
+pid = tl.program_id(0)
+NUM_BLOCKS_M = tl.cdiv(M, BLOCK_M)
+NUM_BLOCKS_N = tl.cdiv(N, BLOCK_N)
+NUM_BLOCKS = NUM_BLOCKS_M * NUM_BLOCKS_N
+for block_idx in range(pid, NUM_BLOCKS, CORE_NUM):  # 交错循环，每个核处理多个块
+    pid_m = block_idx // NUM_BLOCKS_N  # 行块索引
+    pid_n = block_idx % NUM_BLOCKS_N   # 列块索引
+    # BLOCK_M 和 BLOCK_N 都是 split 参数
+    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)[:, None]
+    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)[None, :]
+    mask_m = offs_m < M
+    mask_n = offs_n < N
 ```
 
 #### step1.2.识别分块参数
@@ -365,7 +371,7 @@ hints 参数说明:
     * 通过 `hints` 来显示指定轴关系时，`split_params`、`tiling_params`、`low_dim_axes`、`reduction_axes` 必须传入，即使某些参数为空
     * 合法的轴名称是 `x/y/z/w/v/t`，仅仅用做关系映射
     * `split_params` 和 `tiling_params` 为自动生成 tiling 算法必须的输入，`low_dim_axes` 和 `reduction_axes` 为 tiling 算法的可选输入，用于优化 tiling 效果，留空时 tiling 也能够自动生成，但可能会影响生成的候选 tiling 数量和质量
-    * 当用户传入的 configs 不为空时，`auto_gen_config` 默认值为 `False`，如果希望此时也希望自动生成 tiling 配置并与用户传入的 configs 合并，需要显式在 `hints` 中传如入 `"auto_gen_config": True`
+    * 当用户传入的 configs 不为空时，`auto_gen_config` 默认值为 `False`，如果希望此时也希望自动生成 tiling 配置并与用户传入的 configs 合并，需要显式在 `hints` 中传入 `"auto_gen_config": True`
 
 使用示例：
 ```python
@@ -779,4 +785,4 @@ export TRITON_PRINT_AUTOTUNING=1
 
 **限制：** 进阶用法仅支持 Vector 类算子，不支持 Cube 类算子。
 
-**优先级：** 自定义 autotune > 半自动 autotune (hints) > 自定义 autotune
+**优先级：** 自动 autotune > 半自动 autotune (hints) > 自定义 autotune

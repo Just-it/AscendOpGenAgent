@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch_npu
 import json
 import os
+import random
 
 class Model(nn.Module):
     """

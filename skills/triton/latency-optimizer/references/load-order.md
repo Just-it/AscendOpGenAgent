@@ -70,8 +70,6 @@ def AB_load_kernel(
         tl.store(p_O, b_O)
 
         # store B
-        idx_B = tl.load(p_B_index)
-        p_B = B + idx_B
         tl.store(p_B, b_B)
 ```
 

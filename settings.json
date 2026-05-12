@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PROJECT_ROOT=/home/ascendC python3 /home/ascendC/.claude/hooks/skill_script_hook.py",
+            "timeout": 1830
+          }
+        ]
+      }
+    ]
+  }
+}

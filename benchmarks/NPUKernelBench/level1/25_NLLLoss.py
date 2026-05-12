@@ -33,13 +33,13 @@ def get_input_groups():
     json_path = os.path.join(os.path.dirname(__file__), "25_NLLLoss.json")
     with open(json_path, "r") as f:
         cases = [json.loads(line) for line in f if line.strip()]
-    
+
     input_groups = []
     for idx, case in enumerate(cases):
         inputs = case["inputs"]
         input_info = inputs[0]
         target_info = inputs[1]
-        
+
         dtype_map = {
             "float32": torch.float32,
             "float16": torch.float16,
@@ -56,11 +56,11 @@ def get_input_groups():
         
         target_range = target_info.get("range", [0, input_info["shape"][1] - 1])
         target = torch.randint(target_range[0], target_range[1] + 1, tuple(target_info["shape"]), dtype=torch.int64)
-        
+
         weight = None
         ignore_index = -100
         reduction = "mean"
-        
+
         for inp in inputs[2:]:
             if inp["name"] == "weight":
                 weight = torch.randn(inp["shape"], dtype=dtype)
@@ -68,7 +68,7 @@ def get_input_groups():
                 ignore_index = inp["value"]
             elif inp["name"] == "reduction":
                 reduction = inp["value"]
-        
+
         input_groups.append([input_tensor, target, weight, ignore_index, reduction])
     return input_groups
 

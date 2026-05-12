@@ -50,6 +50,39 @@ Phase 6: 全量用例验证
 Phase 7: Trace 记录         (trace-recorder)
 ```
 
+## Hook 机制说明
+
+本项目的 `.claude/settings.json` 已配置 **toolUse hook**，用于拦截 agent 对 skill 相关脚本的 Bash 调用。
+
+### 被拦截的脚本
+
+| 类别 | 脚本 | 说明 |
+|------|------|------|
+| 退化检测 | `validate_tilelang_impl.py` | TileLang AST 退化检测 |
+| 退化检测 | `validate_ascendc_impl.py` | AscendC AST 退化检测 |
+| 评测脚本 | `evaluate_tilelang.sh` | TileLang 功能验证 |
+| 评测脚本 | `evaluate_ascendc.sh` | AscendC 功能验证 |
+| 构建脚本 | `utils/build_ascendc.py` | AscendC kernel 编译 |
+| 验证脚本 | `utils/verification_ascendc.py` | AscendC 正确性验证 |
+| 验证脚本 | `utils/verification_tilelang.py` | TileLang 正确性验证 |
+| 性能测试 | `performance.py` | 性能对比测试 |
+| 批处理 | `batch_run_performance.sh` | 批量性能测试 |
+
+### Hook 行为
+
+1. **拦截**: 当 agent 通过 Bash tool 调用上述脚本时，hook 自动拦截
+2. **替换执行**: 由 `.claude/hooks/skill_script_hook.py` 接管执行
+3. **等待完成**: hook 等待脚本实际执行完毕（同步阻塞）
+4. **返回结果**: 将 exit code、stdout、stderr 以 JSON 格式返回给 agent
+5. **Agent 继续**: agent 收到结果后才继续下一步
+
+### 配置位置
+
+- Hook 脚本: `.claude/hooks/skill_script_hook.py`
+- Hook 配置: `.claude/settings.json`
+
+> **注意**: 非拦截命令（如普通 `ls`、`cp`、`python` 调用其他脚本）会透传执行，不受影响。
+
 ### 退化检测脚本
 
 | 阶段 | 脚本路径 | 说明 |

@@ -137,6 +137,43 @@ def _resolve_call_name(node):
     return None
 
 
+def _resolve_getattr_call(node):
+    """从 getattr(obj, "attr_name") 或 builtins.getattr(...) 调用中还原 (qualifier, attr)。
+
+    仅处理第二个参数为字符串字面量的情况。
+    返回 (qualifier, attr) 或 None。
+    """
+    if not isinstance(node, ast.Call):
+        return None
+    func = node.func
+    is_getattr = False
+    if isinstance(func, ast.Name) and func.id == "getattr":
+        is_getattr = True
+    elif isinstance(func, ast.Attribute) and func.attr == "getattr":
+        if isinstance(func.value, ast.Name) and func.value.id == "builtins":
+            is_getattr = True
+    if not is_getattr:
+        return None
+    args = node.args
+    if len(args) < 2:
+        return None
+    obj_node = args[0]
+    attr_node = args[1]
+    if not isinstance(attr_node, ast.Constant) or not isinstance(attr_node.value, str):
+        return None
+    attr_name = attr_node.value
+    if isinstance(obj_node, ast.Name):
+        return (obj_node.id, attr_name)
+    if isinstance(obj_node, ast.Attribute):
+        if isinstance(obj_node.value, ast.Name):
+            return (f"{obj_node.value.id}.{obj_node.attr}", attr_name)
+        if isinstance(obj_node.value, ast.Attribute):
+            inner = obj_node.value
+            if isinstance(inner.value, ast.Name):
+                return (f"{inner.value.id}.{inner.attr}.{obj_node.attr}", attr_name)
+    return None
+
+
 def _get_subscript_value_name(node):
     """从 kernel[grid](...) 的 Subscript 节点提取 kernel 名称。"""
     if isinstance(node, ast.Subscript):
@@ -241,6 +278,43 @@ def _count_kernel_launches_in_forward(forward_node):
     return count
 
 
+def _check_single_call_violation(line, qual, attr):
+    """对单个 (qualifier, attr) 调用判断是否违规，返回 violation dict 或 None。"""
+    if qual == "torch":
+        if attr not in ALLOWED_TORCH_FUNCS:
+            return {
+                "line": line,
+                "call": f"torch.{attr}",
+                "reason": f"torch.{attr} 是计算操作，必须在 Triton kernel 中实现",
+            }
+        return None
+    if qual in ("F", "functional", "torch.nn.functional", "nn.functional"):
+        return {
+            "line": line,
+            "call": f"{qual}.{attr}",
+            "reason": f"{qual}.{attr} 是 PyTorch 计算操作，必须在 Triton kernel 中实现",
+        }
+    if qual == "triton" and attr in ALLOWED_TRITON_ATTRS:
+        return None
+    if attr in FORBIDDEN_TENSOR_METHODS:
+        if qual not in ("torch", "F", "triton", "functional", "torch.nn.functional", "nn.functional"):
+            return {
+                "line": line,
+                "call": f"{qual}.{attr}()" if qual else f"{attr}()",
+                "reason": f"{attr} 是计算操作，必须在 Triton kernel 中实现",
+            }
+        return None
+    if qual == "self":
+        if attr not in ("forward",):
+            return {
+                "line": line,
+                "call": f"self.{attr}(...)",
+                "reason": f"self.{attr}() 疑似 nn.Module 前向调用，核心计算必须在 Triton kernel 中实现",
+            }
+        return None
+    return None
+
+
 def check_forbidden_torch_ops(forward_node):
     """检查 forward 中是否使用了禁止的 torch 计算操作或 Python 控制流。
 
@@ -306,51 +380,31 @@ def check_forbidden_torch_ops(forward_node):
 
         qual, attr = resolved
 
-        # --- torch.xxx(...) ---
-        if qual == "torch":
-            if attr not in ALLOWED_TORCH_FUNCS:
+        # --- getattr(obj, "attr") 反射绕过检测 ---
+        if attr == "getattr" and qual in (None, "builtins"):
+            getattr_resolved = _resolve_getattr_call(node)
+            if getattr_resolved is not None:
+                gqual, gattr = getattr_resolved
+                getattr_violation = _check_single_call_violation(
+                    node.lineno, gqual, gattr
+                )
+                if getattr_violation is not None:
+                    getattr_violation["call"] = (
+                        f"getattr({gqual}, '{gattr}')"
+                    )
+                    violations.append(getattr_violation)
+            else:
                 violations.append({
                     "line": node.lineno,
-                    "call": f"torch.{attr}",
-                    "reason": f"torch.{attr} 是计算操作，必须在 Triton kernel 中实现",
+                    "call": "getattr(...)",
+                    "reason": "getattr() 动态属性访问疑似绕过检测，forward() 中禁止使用 getattr 调用 PyTorch 接口",
                 })
             continue
 
-        # --- F.xxx(...) / functional.xxx(...) ---
-        if qual in ("F", "functional", "torch.nn.functional", "nn.functional"):
-            violations.append({
-                "line": node.lineno,
-                "call": f"{qual}.{attr}",
-                "reason": f"{qual}.{attr} 是 PyTorch 计算操作，必须在 Triton kernel 中实现",
-            })
-            continue
-
-        # --- triton.cdiv 等 —— 允许 ---
-        if qual == "triton" and attr in ALLOWED_TRITON_ATTRS:
-            continue
-
-        # --- tensor 方法计算操作 ---
-        if attr in FORBIDDEN_TENSOR_METHODS:
-            # 排除已知安全的 qual（torch/F/triton 已在上面处理）
-            if qual not in ("torch", "F", "triton", "functional", "torch.nn.functional", "nn.functional"):
-                violations.append({
-                    "line": node.lineno,
-                    "call": f"{qual}.{attr}()" if qual else f"{attr}()",
-                    "reason": f"{attr} 是计算操作，必须在 Triton kernel 中实现",
-                })
-            continue
-
-        # --- self.layer_name(x) —— 禁止 nn.Module 调用 ---
-        if qual == "self":
-            # 允许 self.forward() 递归，以及属性访问不在这里（ast.Attribute 不是 Call）
-            # self.xxx(...) 形式视为 nn.Module 前向调用
-            if attr not in ("forward",):
-                violations.append({
-                    "line": node.lineno,
-                    "call": f"self.{attr}(...)",
-                    "reason": f"self.{attr}() 疑似 nn.Module 前向调用，核心计算必须在 Triton kernel 中实现",
-                })
-            continue
+        violation = _check_single_call_violation(node.lineno, qual, attr)
+        if violation is not None:
+            violations.append(violation)
+        continue
 
     # --- 规则 B: 如果 forward() 中 kernel 启动次数 > 1，视为 Type3 退化 ---
     if kernel_launch_count > 1:

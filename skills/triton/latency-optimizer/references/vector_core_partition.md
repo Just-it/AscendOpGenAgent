@@ -366,7 +366,6 @@ def softmax_kernel(
 | 策略 | 适用场景 | Grid 大小 |
 |------|---------|---------|
 | **一维分核** | 单维度处理（如逐行） | min(N / BLOCK, num_cores) |
-| **二维分核** | 矩阵运算（如 matmul） | (M / BM, N / BN) |
 | **多行并行** | 行级 reduce（如 softmax） | min(M / ROWS_PER_BLOCK, num_cores) |
 
 ### 选择依据

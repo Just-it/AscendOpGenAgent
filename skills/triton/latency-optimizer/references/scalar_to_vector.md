@@ -116,9 +116,8 @@ def count_2d(topk_ids_ptr, expert_num_tokens_ptr, num_experts: tl.constexpr,
 **原始代码（scalar 控制流）**
 
 ```python
-# 莫格
 x = tl.load(x_ptr + offsets, mask=mask)
-if x > 0:  # 标量条件，导致 warp divergence
+if x > 0:  # 标量条件，导致 SIMD 分支分化
     result = tl.exp(x)
 else:
     result = tl.cos(x)
@@ -130,17 +129,16 @@ else:
 x = tl.load(x_ptr + offsets, mask=mask)
 cond_mask = x > 0  # vector 比较，返回布尔向量
 exp_result = tl.exp(x)
-log_result = tl.cos(x)
-result = cond_mask * exp_result + ~cond_mask * log_result  # vector 加法，无分支
+cos_result = tl.cos(x)
+result = cond_mask * exp_result + ~cond_mask * cos_result  # vector 加法，无分支
 ```
 
 **场景二：两个分支的计算逻辑定义域不一样，至少有一个会出现nan或inf等无效输出**
 **原始代码（scalar 控制流）**
 
 ```python
-# 莫格
 x = tl.load(x_ptr + offsets, mask=mask)
-if x > 0:  # 标量条件，导致 warp divergence
+if x > 0:  # 标量条件，导致 SIMD 分支分化
     result = tl.exp(x)
 else:
     result = tl.log(x)
@@ -268,7 +266,7 @@ d = a - (a // b) * b  # 公式转换
 
 - **标量广播优化**：10-20% 加速，通过消除标量指令开销
 - **标量规约优化**：5-128 倍加速（取决于 vector 并行度，FP16 理论加速比 128 倍）
-- **控制流优化**：消除 warp divergence，提升 SIMD 利用率至 90%+
+- **控制流优化**：消除 SIMD 分支分化，提升 Vector 利用率至 90%+
 - **整体 kernel 优化**：在 LayerNorm、Softmax 等带宽受限算子中，端到端性能提升 2-3 倍
 
 **实测数据参考**：在 LayerNorm 算子中，将 mean/variance 计算从标量累加改为 vector 分块规约，UB 利用率从 35% 提升至 78%，kernel 执行时间减少 62%。

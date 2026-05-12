@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import json
 import os
+import random
 
 class Model(nn.Module):
     """
@@ -34,13 +35,13 @@ def get_input_groups():
     input_groups = []
     for idx, case in enumerate(cases):
         inputs = case["inputs"]
-        
+
         dtype_map = {
             "float32": torch.float32,
             "float16": torch.float16,
             "bfloat16": torch.bfloat16,
         }
-        
+
         x_info = inputs[0]
         dtype = dtype_map[x_info["dtype"]]
         if idx % 2 == 0:
@@ -53,7 +54,7 @@ def get_input_groups():
         num_groups = None
         weight = None
         bias = None
-        
+
         for inp in inputs[1:]:
             if inp["name"] == "num_groups":
                 num_groups = inp["value"]
@@ -61,7 +62,7 @@ def get_input_groups():
                 weight = torch.randn(inp["shape"], dtype=dtype)
             elif inp["name"] == "bias":
                 bias = torch.randn(inp["shape"], dtype=dtype)
-        
+
         input_groups.append([x, num_groups, weight, bias])
     return input_groups
 

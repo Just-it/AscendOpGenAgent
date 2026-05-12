@@ -160,7 +160,7 @@ for n in range(N):
     sum_val += val  # 标量加法
 
 # 特征 3：标量控制流
-if x > 0:  # 标量条件，导致 warp divergence
+if x > 0:  # 标量条件，导致 SIMD 分支分化
     result = tl.exp(x)
 else:
     result = tl.cos(x)

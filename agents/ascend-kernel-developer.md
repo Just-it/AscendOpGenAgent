@@ -13,6 +13,7 @@ tools:
 skills:
   - case-simplifier
   - design-doc-generator
+  - ascendc-operator-design
   - tilelang-designer
   - ascendc-translator
   - ascendc-code-gen

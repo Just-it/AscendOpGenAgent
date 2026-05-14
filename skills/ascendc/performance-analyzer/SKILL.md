@@ -31,9 +31,8 @@ argument-hint: >
 │   ├── model.json        # 测试用例文件（JSON Lines），model.py 按 __file__ 查找
 │   ├── <op_name>.json    # 原始测试用例文件（备份保留）
 │   ├── <op_name>.json.bak# 原始 .json 备份
-│   ├── model_new_tilelang.py # TileLang 优化实现（仅复杂算子路径）
-│   ├── model_new_ascendc.py  # AscendC 优化实现（内部调 torch.ops.npu.<op>()）
-│   └── kernel/           # AscendC kernel + whl 包
+│   ├── model_new_tilelang.py # TileLang 优化实现（如存在）
+│   ├── model_new_ascendc.py  # AscendC 优化实现（如存在）
 └── <other_tasks>/        # 其他历史任务
 ```
 
@@ -61,32 +60,73 @@ argument-hint: >
    - 每种实现的平均耗时
    - 相对于参考实现的加速比
    - TileLang vs AscendC 的对比（仅在两者都被实际测试时提供）
-   - 输出`preformance.json`，用于记录每个case的加速比
+   - 输出 `preformance.json`（保留旧名以兼容历史调用方）与 `performance.json`（正确拼写，同内容副本）
+   - 默认在 stdout 同时输出含 DType 列的 markdown 报告，供 agent 在对话中直接回显
 
 ## 输出格式
 
-将性能测试结果以结构化格式输出：
+将性能测试结果以结构化 markdown 形式输出。**借鉴 `ascendc-operator-performance-eval` 的报告骨架**，含
+统一对比表（带 Shape/DType 列）、全量汇总、按数据类型汇总与简短分析四节：
 
 ```markdown
-## 性能分析报告
+## Performance Analysis
 
-### 测试环境
-- 设备: {device}
-- warmup: {warmup} 轮
-- repeat: {repeat} 轮
+- **Operator**: {op}
+- **Device**: {device}
+- **Warmup**: {warmup}
+- **Repeat**: {repeats}
+- **Reference**: `model.py` (OK)
+- **AscendC**: `model_new_ascendc.py` (OK)
 
-### 测试结果
+### 性能对比
 
-| 实现 | 平均耗时(ms) | 加速比(vs 参考) |
-|------|-------------|----------------|
-| Reference | {time} | 1.00x |
-| AscendC | {time} | {speedup}x |
+| Case | Shape | DType | 参考(ms) | AscendC(ms) | 加速比 |
+| ---- | ----- | ----- | -------- | ----------- | ------ |
+| 0 | [128, 4096] | float16 | 0.086 | 0.046 | 1.870x |
+| 1 | [64, 3584]  | bfloat16 | 0.072 | 0.061 | 1.180x |
+| ... | ... | ... | ... | ... | ... |
+
+### 全量汇总
+
+| 指标 | 值 |
+| ---- | -- |
+| 用例数 | N |
+| 平均加速比(>1 表示 AscendC 更快) | X.XXXx |
+| AscendC 更优(比值>1) | M |
+| 参考更优(比值<1) | K |
+| Overall speedup | Y.YYYx |
+
+### 按数据类型汇总
+
+| DType | 用例数 | 平均加速比 | AscendC 更优 | 参考更优 |
+| ----- | ------ | ---------- | ------------ | -------- |
+| float16  | 4 | 1.870x | 4 | 0 |
+| bfloat16 | 2 | 1.180x | 2 | 0 |
+| float32  | 2 | 0.920x | 1 | 1 |
+
+### 简短分析
+
+- 整体平均加速比 X.XXx,AscendC 实现整体快于/慢于参考实现。
+- 不同 dtype 表现差异:float16 平均 X.XXx 最优,float32 平均 Y.YYx 相对劣势。
+- shape 规模影响:小规模平均 A.AAx,大规模平均 B.BBx,大 shape 优势更明显。
+```
 
 > **注意**：默认只要求 Reference 和 AscendC 通过正确性验证。TileLang 当前主要用于设计表达，除非用户明确要求，否则不纳入性能 gate。
 
-### 结论
-{分析结论，如哪种实现最优、是否达到预期加速等}
-```
+## 对话内回显（MANDATORY）
+
+调用 `performance.py` 后，agent **必须**在当前对话回复中同时完成下列事项，**不得**只输出
+"报告已生成"和路径而不展示数据：
+
+1. **粘贴性能对比表**：表头 `Case | Shape | DType | 参考(ms) | AscendC(ms) | 加速比`，所有
+   dtype 在同一张表中展示。case 多时可截断并注明"其余见 `performance.json` / markdown 报告"。
+2. **粘贴全量汇总**：用例数、平均加速比、AscendC/参考各自更优条数。
+3. **粘贴按数据类型汇总**：分 dtype 的统计表。
+4. **粘贴简短分析**：≥3 条结论，涵盖整体趋势、不同 dtype 差异、shape 规模差异等。
+
+> 脚本默认在 stdout 末尾打印上述 markdown 形式的报告，可直接复制到对话中；如需关闭可使用 `--no-display`。
+
+**NEVER**：仅回复报告路径；NEVER 用"请自行打开 markdown"替代在对话中展示核心数字与结论。
 
 ## 异常处理
 

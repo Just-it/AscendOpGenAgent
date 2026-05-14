@@ -95,7 +95,16 @@ def _synchronize(device):
 
 
 def _get_input_groups(output_dir: Path):
-    """从 output_dir 下的 .json 文件读取输入 cases。"""
+    """从 output_dir 下的 .json 文件读取输入 cases。
+
+    Returns:
+        (input_groups, json_path, case_metas):
+            input_groups: List[List[tensor / value]] —— 每个 case 的实参列表
+            json_path: str —— 使用的 case 文件路径
+            case_metas: List[dict] —— 每个 case 的元信息 {shape, dtype},
+                取自该 case 的「主张量」(inputs 中第一个 type=tensor 的项),
+                找不到主张量时 shape/dtype 取 "?",仅用于报告展示。
+    """
     json_files = sorted(output_dir.glob("*.json"))
     json_path = None
     for f in json_files:
@@ -121,13 +130,21 @@ def _get_input_groups(output_dir: Path):
     }
 
     input_groups = []
+    case_metas = []
     for case in cases:
         inputs = case["inputs"]
         group = []
+        meta_shape = "?"
+        meta_dtype = "?"
+        meta_filled = False
         for inp in inputs:
             if inp["type"] == "tensor":
                 dtype = dtype_map.get(inp["dtype"], torch.float32)
                 shape = inp["shape"]
+                if not meta_filled:
+                    meta_shape = list(shape)
+                    meta_dtype = inp["dtype"]
+                    meta_filled = True
                 if dtype == torch.bool:
                     t = torch.randint(0, 2, shape, dtype=dtype)
                 elif dtype.is_floating_point:
@@ -135,6 +152,23 @@ def _get_input_groups(output_dir: Path):
                 else:
                     t = torch.randint(0, 10, shape, dtype=dtype)
                 group.append(t)
+            elif inp["type"] == "tensor_list":
+                dtype = dtype_map.get(inp["dtype"], torch.float32)
+                shapes = inp["shapes"]
+                if not meta_filled and shapes:
+                    meta_shape = list(shapes[0])
+                    meta_dtype = inp["dtype"]
+                    meta_filled = True
+                tensors = []
+                for shape in shapes:
+                    if dtype == torch.bool:
+                        t = torch.randint(0, 2, shape, dtype=dtype)
+                    elif dtype.is_floating_point:
+                        t = torch.randn(shape, dtype=dtype)
+                    else:
+                        t = torch.randint(0, 10, shape, dtype=dtype)
+                    tensors.append(t)
+                group.append(tensors)
             elif inp["type"] == "attr":
                 if inp["dtype"] in ("float", "double"):
                     group.append(float(inp.get("value", 0.0)))
@@ -145,8 +179,9 @@ def _get_input_groups(output_dir: Path):
             else:
                 group.append(inp.get("value"))
         input_groups.append(group)
+        case_metas.append({"shape": meta_shape, "dtype": meta_dtype})
 
-    return input_groups, str(json_path)
+    return input_groups, str(json_path), case_metas
 
 
 def _load_impl(output_dir: Path, impl: str):
@@ -358,7 +393,7 @@ def run_performance(output_dir: str, warmup: int = WARMUP_DEFAULT, repeats: int 
     asc_module, asc_cls, asc_path = _load_impl(output_dir_path, "ascendc")
 
     init_inputs = getattr(ref_module, "get_init_inputs", lambda: [])()
-    input_groups, json_path = _get_input_groups(output_dir_path)
+    input_groups, json_path, case_metas = _get_input_groups(output_dir_path)
 
     report = {
         "op": output_dir_path.name,
@@ -396,8 +431,11 @@ def run_performance(output_dir: str, warmup: int = WARMUP_DEFAULT, repeats: int 
             operators, latency_ms, peak_mem = _measure_single_with_profiler(
                 ref_model, model_inputs, warmup, repeats, f"ref_profile_case{idx}", device
             )
+            meta = case_metas[idx] if idx < len(case_metas) else {"shape": "?", "dtype": "?"}
             report["reference"]["case_results"].append({
                 "index": idx,
+                "shape": meta["shape"],
+                "dtype": meta["dtype"],
                 "latency_ms": latency_ms,
                 "peak_memory_mb": peak_mem,
                 "operators": operators or {},
@@ -420,8 +458,11 @@ def run_performance(output_dir: str, warmup: int = WARMUP_DEFAULT, repeats: int 
             operators, latency_ms, peak_mem = _measure_single_with_profiler(
                 asc_model, model_inputs, warmup, repeats, f"asc_profile_case{idx}", device
             )
+            meta = case_metas[idx] if idx < len(case_metas) else {"shape": "?", "dtype": "?"}
             report["ascendc"]["case_results"].append({
                 "index": idx,
+                "shape": meta["shape"],
+                "dtype": meta["dtype"],
                 "latency_ms": latency_ms,
                 "peak_memory_mb": peak_mem,
                 "operators": operators or {},
@@ -442,6 +483,8 @@ def run_performance(output_dir: str, warmup: int = WARMUP_DEFAULT, repeats: int 
             speedups.append(speedup)
             report["per_case_speedup"].append({
                 "index": ref_case["index"],
+                "shape": ref_case.get("shape", "?"),
+                "dtype": ref_case.get("dtype", "?"),
                 "reference_ms": ref_lat,
                 "ascendc_ms": asc_lat,
                 "speedup": round(speedup, 4),
@@ -489,47 +532,227 @@ def _print_report(report: dict):
         print("=" * 88)
 
 
+def _shape_str(shape) -> str:
+    if isinstance(shape, (list, tuple)):
+        return "[" + ", ".join(str(int(s)) for s in shape) + "]"
+    return str(shape)
+
+
+def _group_by_dtype(per_case: List[Dict[str, Any]]) -> List[Tuple[str, List[Dict[str, Any]]]]:
+    """按 dtype 分组,稳定排序;preferred 排前。"""
+    buckets: Dict[str, List[Dict[str, Any]]] = {}
+    for c in per_case:
+        buckets.setdefault(str(c.get("dtype", "?")), []).append(c)
+    preferred = ("float16", "bfloat16", "float32", "int8", "int16", "int32", "int64", "bool")
+    out: List[Tuple[str, List[Dict[str, Any]]]] = []
+    seen: set = set()
+    for dt in preferred:
+        if dt in buckets:
+            out.append((dt, buckets[dt]))
+            seen.add(dt)
+    for dt in sorted(k for k in buckets if k not in seen):
+        out.append((dt, buckets[dt]))
+    return out
+
+
+def _dtype_summary_rows(per_case: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows = []
+    for dtype, cases in _group_by_dtype(per_case):
+        speedups = [c["speedup"] for c in cases if c.get("speedup") not in (None, float("inf"))]
+        avg = statistics.mean(speedups) if speedups else None
+        better = sum(1 for s in speedups if s > 1.0)
+        worse = sum(1 for s in speedups if s < 1.0)
+        rows.append({
+            "dtype": dtype,
+            "count": len(cases),
+            "avg_speedup": avg,
+            "ascendc_better": better,
+            "reference_better": worse,
+        })
+    return rows
+
+
+def _brief_analysis(report: dict) -> List[str]:
+    """基于实际数据生成 ≥3 条简短分析。"""
+    bullets: List[str] = []
+    per_case = report.get("per_case_speedup", [])
+    overall = report.get("overall_speedup")
+
+    # 1. 整体趋势
+    if overall is not None:
+        if overall > 1.0:
+            bullets.append(
+                f"整体平均加速比 {overall:.2f}x(> 1),AscendC 实现整体快于参考实现。"
+            )
+        elif overall < 1.0:
+            bullets.append(
+                f"整体平均加速比 {overall:.2f}x(< 1),AscendC 实现整体慢于参考实现,需进一步优化。"
+            )
+        else:
+            bullets.append(f"整体平均加速比 {overall:.2f}x,与参考实现持平。")
+    else:
+        bullets.append("整体加速比未能计算,可能存在参考或 AscendC 实现执行失败的情况。")
+
+    # 2. dtype 差异
+    dt_rows = _dtype_summary_rows(per_case)
+    if len(dt_rows) >= 2:
+        valid = [r for r in dt_rows if r["avg_speedup"] is not None]
+        if valid:
+            best = max(valid, key=lambda r: r["avg_speedup"])
+            worst = min(valid, key=lambda r: r["avg_speedup"])
+            if best["dtype"] != worst["dtype"]:
+                bullets.append(
+                    f"不同 dtype 表现差异:{best['dtype']} 平均 {best['avg_speedup']:.2f}x 最优,"
+                    f"{worst['dtype']} 平均 {worst['avg_speedup']:.2f}x 相对劣势。"
+                )
+            else:
+                bullets.append(
+                    f"各 dtype 平均加速比相近,均约 {best['avg_speedup']:.2f}x 左右。"
+                )
+    elif len(dt_rows) == 1 and dt_rows[0]["avg_speedup"] is not None:
+        bullets.append(
+            f"全部用例采用 {dt_rows[0]['dtype']},平均加速比 {dt_rows[0]['avg_speedup']:.2f}x。"
+        )
+
+    # 3. shape 规模差异(按主张量元素数粗分大/小)
+    sized_cases = []
+    for c in per_case:
+        sh = c.get("shape")
+        if isinstance(sh, (list, tuple)) and sh:
+            try:
+                n = 1
+                for v in sh:
+                    n *= int(v)
+                sized_cases.append((n, c["speedup"]))
+            except Exception:
+                continue
+    if len(sized_cases) >= 2:
+        sized_cases.sort(key=lambda p: p[0])
+        half = len(sized_cases) // 2
+        small_avg = statistics.mean([p[1] for p in sized_cases[:half]]) if half else None
+        large_avg = statistics.mean([p[1] for p in sized_cases[half:]]) if len(sized_cases) - half else None
+        if small_avg is not None and large_avg is not None:
+            if abs(large_avg - small_avg) >= 0.1:
+                trend = "大 shape 优势更明显" if large_avg > small_avg else "小 shape 表现更好"
+                bullets.append(
+                    f"shape 规模影响:小规模平均 {small_avg:.2f}x,大规模平均 {large_avg:.2f}x,{trend}。"
+                )
+            else:
+                bullets.append(
+                    f"不同 shape 规模下加速比稳定,小规模 {small_avg:.2f}x、大规模 {large_avg:.2f}x。"
+                )
+
+    # 4. 失败情况
+    if not report["reference"]["ok"]:
+        bullets.append(f"⚠ 参考实现执行失败:{report['reference']['error']}")
+    if not report["ascendc"]["ok"]:
+        bullets.append(f"⚠ AscendC 实现执行失败:{report['ascendc']['error']}")
+
+    # 兜底:确保 ≥3 条
+    while len(bullets) < 3:
+        bullets.append("用例覆盖样本较少,建议补充更多 shape/dtype 组合后再下结论。")
+        break
+
+    return bullets
+
+
 def _report_to_markdown(report: dict) -> str:
-    """将性能报告转为 markdown 格式，便于写入 trace.md。"""
-    lines = []
+    """将性能报告转为 markdown 格式,便于写入 trace.md 或对话回显。
+
+    结构(借鉴 ascendc-operator-performance-eval 外部 skill):
+      ## Performance Analysis
+      - 元信息
+      ### 性能对比
+      - 单表:Case | Shape | DType | 参考(ms) | AscendC(ms) | 加速比
+      ### 全量汇总
+      - 用例数 / 平均加速比 / 双方更优条数
+      ### 按数据类型汇总
+      - 分 dtype 的统计表
+      ### 简短分析
+      - ≥3 条结论
+    """
+    lines: List[str] = []
     lines.append("## Performance Analysis")
     lines.append("")
     lines.append(f"- **Operator**: {report['op']}")
     lines.append(f"- **Device**: {report['device']}")
     lines.append(f"- **Warmup**: {report['warmup']}")
     lines.append(f"- **Repeat**: {report['repeats']}")
+    lines.append(f"- **Reference**: `{report['reference']['model_path']}` "
+                 f"({'OK' if report['reference']['ok'] else 'ERROR'})")
+    lines.append(f"- **AscendC**: `{report['ascendc']['model_path']}` "
+                 f"({'OK' if report['ascendc']['ok'] else 'ERROR'})")
+    if not report["reference"]["ok"]:
+        lines.append(f"- Reference Error: `{report['reference']['error']}`")
+    if not report["ascendc"]["ok"]:
+        lines.append(f"- AscendC Error: `{report['ascendc']['error']}`")
     lines.append("")
 
-    for impl in ("reference", "ascendc"):
-        r = report[impl]
-        status = "OK" if r["ok"] else "ERROR"
-        lines.append(f"### {impl.capitalize()} ({status})")
-        lines.append(f"- Model: `{r['model_path']}`")
-        if not r["ok"]:
-            lines.append(f"- Error: `{r['error']}`")
-        else:
-            for case in r["case_results"]:
-                idx = case["index"]
-                lat = case["latency_ms"]
-                mem = case["peak_memory_mb"]
-                lines.append(f"- case[{idx}]: latency={lat:.4f} ms, peak_memory={mem:.2f} MB")
-        lines.append("")
+    per_case = report.get("per_case_speedup", [])
 
-    if report["per_case_speedup"]:
-        lines.append("### Per-Case Speedup")
+    # 性能对比单表
+    if per_case:
+        lines.append("### 性能对比")
         lines.append("")
-        lines.append("| case | reference (ms) | ascendc (ms) | speedup |")
-        lines.append("|------|---------------|-------------|---------|")
-        for case in report["per_case_speedup"]:
+        lines.append("| Case | Shape | DType | 参考(ms) | AscendC(ms) | 加速比 |")
+        lines.append("| ---- | ----- | ----- | -------- | ----------- | ------ |")
+        for c in per_case:
             lines.append(
-                f"| {case['index']} | {case['reference_ms']:.4f} | "
-                f"{case['ascendc_ms']:.4f} | {case['speedup']:.2f}x |"
+                f"| {c['index']} | {_shape_str(c.get('shape', '?'))} | {c.get('dtype', '?')} | "
+                f"{c['reference_ms']:.4f} | {c['ascendc_ms']:.4f} | {c['speedup']:.3f}x |"
             )
         lines.append("")
-        lines.append(f"**Overall speedup**: {report['overall_speedup']:.2f}x")
+
+        # 全量汇总
+        valid_speedups = [c["speedup"] for c in per_case if c.get("speedup") not in (None, float("inf"))]
+        avg = statistics.mean(valid_speedups) if valid_speedups else None
+        ascendc_better = sum(1 for s in valid_speedups if s > 1.0)
+        reference_better = sum(1 for s in valid_speedups if s < 1.0)
+        lines.append("### 全量汇总")
+        lines.append("")
+        lines.append("| 指标 | 值 |")
+        lines.append("| ---- | -- |")
+        lines.append(f"| 用例数 | {len(per_case)} |")
+        if avg is not None:
+            lines.append(f"| 平均加速比(>1 表示 AscendC 更快) | {avg:.3f}x |")
+        else:
+            lines.append("| 平均加速比 | n/a |")
+        lines.append(f"| AscendC 更优(比值>1) | {ascendc_better} |")
+        lines.append(f"| 参考更优(比值<1) | {reference_better} |")
+        if report.get("overall_speedup") is not None:
+            lines.append(f"| Overall speedup | {report['overall_speedup']:.3f}x |")
         lines.append("")
 
+        # 按数据类型汇总
+        dt_rows = _dtype_summary_rows(per_case)
+        if dt_rows:
+            lines.append("### 按数据类型汇总")
+            lines.append("")
+            lines.append("| DType | 用例数 | 平均加速比 | AscendC 更优 | 参考更优 |")
+            lines.append("| ----- | ------ | ---------- | ------------ | -------- |")
+            for r in dt_rows:
+                avg_s = f"{r['avg_speedup']:.3f}x" if r["avg_speedup"] is not None else "n/a"
+                lines.append(
+                    f"| {r['dtype']} | {r['count']} | {avg_s} | "
+                    f"{r['ascendc_better']} | {r['reference_better']} |"
+                )
+            lines.append("")
+
+    # 简短分析
+    lines.append("### 简短分析")
+    lines.append("")
+    for b in _brief_analysis(report):
+        lines.append(f"- {b}")
+    lines.append("")
+
     return "\n".join(lines)
+
+
+def _display_console(report: dict) -> None:
+    """在 stdout 直接 print 漂亮的 markdown 形式,供 agent 在对话中回显。"""
+    print()
+    print(_report_to_markdown(report))
+    print()
 
 
 def main():
@@ -540,36 +763,47 @@ def main():
     parser.add_argument("--seed", type=int, default=0, help="随机种子（默认 0）")
     parser.add_argument("--output", help="输出 JSON 报告文件路径")
     parser.add_argument("--markdown", help="输出 Markdown 报告文件路径（用于 trace.md）")
+    parser.add_argument(
+        "--no-display",
+        action="store_true",
+        help="关闭末尾的 markdown 形式对话回显（默认开启）",
+    )
     args = parser.parse_args()
 
     report = run_performance(args.output_dir, args.warmup, args.repeats, args.seed)
     _print_report(report)
-    
+
     if args.output:
         # 1. 检查路径是否已经是一个存在的目录
         if os.path.isdir(args.output):
-            # 2. 如果是目录，自动拼接一个默认的文件名 (例如 report.json)
-            save_path = os.path.join(args.output, "preformance.json")
-            print(f"提示: 检测到输出路径为目录，将自动保存为: {save_path}")
+            # 2. 目录:同时写出 preformance.json(旧名,向后兼容)与 performance.json(正确名)
+            legacy_path = os.path.join(args.output, "preformance.json")
+            canonical_path = os.path.join(args.output, "performance.json")
+            with open(legacy_path, "w", encoding="utf-8") as f:
+                json.dump(report, f, indent=2, ensure_ascii=False)
+            with open(canonical_path, "w", encoding="utf-8") as f:
+                json.dump(report, f, indent=2, ensure_ascii=False)
+            print(f"\nJSON report saved to: {legacy_path}")
+            print(f"JSON report saved to: {canonical_path} (alias)")
         else:
-            # 3. 如果不是目录，则按原样处理（视为文件路径）
-            # 注意：这里也可以增加检查父目录是否存在的逻辑，防止路径错误
+            # 3. 如果不是目录,按文件路径写入
             save_path = args.output
-
-        # 4. 确保父目录存在（防止因为文件夹没创建而报错）
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-
-        # 5. 安全地写入文件
-        with open(save_path, "w", encoding="utf-8") as f:
-            json.dump(report, f, indent=2, ensure_ascii=False)
-        print(f"\nJSON report saved to: {save_path}")    
-    
+            parent = os.path.dirname(save_path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(save_path, "w", encoding="utf-8") as f:
+                json.dump(report, f, indent=2, ensure_ascii=False)
+            print(f"\nJSON report saved to: {save_path}")
 
     if args.markdown:
         md = _report_to_markdown(report)
         with open(args.markdown, "w", encoding="utf-8") as f:
             f.write(md)
         print(f"Markdown report saved to: {args.markdown}")
+
+    # 末尾默认在 stdout 输出 markdown 形式的报告,供 agent 在对话中直接回显
+    if not args.no_display:
+        _display_console(report)
 
 
 if __name__ == "__main__":

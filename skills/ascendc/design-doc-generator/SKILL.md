@@ -17,11 +17,8 @@ argument-hint: >
 
 本 skill 用于**简单算子**路径（见 CLAUDE.md 路由规则）：
 - Elementwise: ReLU, GELU, Sigmoid, Tanh, Add, Mul, Sub, Div, Abs, Exp, Log, Sqrt, ELU 等
-- Pooling: AvgPool, MaxPool 标准变体
-- 基础 Activation: LeakyReLU, Softplus, Hardsigmoid 等
-- 简单 Index: Argmax, Argmin
 
-**复杂算子**（Attention, MatMul 变体, RMSNorm/LayerNorm 多 strategy, Sort, TopK, 多输入融合）走 TileLang 设计表达路径，不使用本 skill。
+**复杂算子**（Attention, MatMul 变体, RMSNorm/LayerNorm 多 strategy, Sort, TopK, 多输入融合, Pooling, Activation, Index 等）走 TileLang 设计表达路径，不使用本 skill。
 
 ## 关键限制
 - 只允许修改或新增 `{output_dir}/` 目录中的文件，不要改动其他目录中的文件。
@@ -36,9 +33,6 @@ argument-hint: >
 | `templates/design-template.md` | 设计文档模板（8 章节完整结构） |
 | `references/elementwise-tiling.md` | 逐元素算子 Tiling 策略参考（含 UB 分配表） |
 | `references/reduction-tiling.md` | 归约算子 Tiling 策略参考 |
-| `references/pooling-tiling.md` | 池化算子 Tiling 策略参考 |
-| `references/index-tiling.md` | 索引算子 Tiling 策略参考 |
-| `references/sort-tiling.md` | 排序算子 Tiling 策略参考 |
 | `references/general-tiling-principles.md` | 通用 Tiling 原则 |
 | `references/hardware-architecture.md` | 硬件架构约束 |
 
@@ -55,7 +49,7 @@ argument-hint: >
 | 计算逻辑 | forward 中的 torch 调用 | `torch.relu(x)` → 逐元素 max(0, x) |
 | 输入数量 | forward 参数 | 单输入 / 双输入 |
 | 支持的 dtype | forward 中的类型判断 | `assert x.dtype in (torch.float16, torch.float32)` |
-| 算子类型 | 计算特征 | elementwise / pooling / activation / index |
+| 算子类型 | 计算特征 | elementwise |
 
 **MANDATORY**: 检查 PyTorch 是否存在同名接口。若存在，接口签名必须与之对齐。
 
@@ -65,9 +59,6 @@ argument-hint: >
 |----------|---------|
 | 逐元素操作 | `references/elementwise-tiling.md` |
 | 归约操作 | `references/reduction-tiling.md` |
-| 池化操作 | `references/pooling-tiling.md` |
-| 索引操作 | `references/index-tiling.md` |
-| 排序操作 | `references/sort-tiling.md` |
 | 所有类型 | `references/general-tiling-principles.md` + `references/hardware-architecture.md` |
 
 ### 3. 生成设计文档

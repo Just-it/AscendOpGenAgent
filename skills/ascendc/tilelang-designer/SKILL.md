@@ -22,7 +22,7 @@ argument-hint: >
 - Sort: Sort, TopK
 - 多输入融合: Concat, multi-tensor fused ops
 
-**简单算子**（Elementwise, Pooling, 基础 Activation, 简单 Index）走 `design-doc-generator` → `ascendc-code-gen` 路径，不使用本 skill。
+**简单算子**（Elementwise）走 `design-doc-generator` → `ascendc-code-gen` 路径，不使用本 skill。
 
 ## 关键限制
 - 必须将核心计算融合成单个算子实现，不要拆分成多个独立算子。

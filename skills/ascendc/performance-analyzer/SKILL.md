@@ -60,7 +60,7 @@ argument-hint: >
    - 每种实现的平均耗时
    - 相对于参考实现的加速比
    - TileLang vs AscendC 的对比（仅在两者都被实际测试时提供）
-   - 输出 `preformance.json`（保留旧名以兼容历史调用方）与 `performance.json`（正确拼写，同内容副本）
+   - 输出 `performance.json`,用于记录每个case的加速比
    - 默认在 stdout 同时输出含 DType 列的 markdown 报告，供 agent 在对话中直接回显
 
 ## 输出格式

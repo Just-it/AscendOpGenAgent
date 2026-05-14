@@ -5,10 +5,14 @@ import torch
 import torch.nn as nn
 
 _KERNEL_BUILD = Path(__file__).resolve().parent / "kernel" / "build"
-if _KERNEL_BUILD.is_dir() and str(_KERNEL_BUILD) not in sys.path:
-    sys.path.insert(0, str(_KERNEL_BUILD))
 
-import _matmul_leakyrelu_ext as _ext  # noqa: E402
+try:
+    import matmul_leakyrelu_ext  # noqa: F401
+except ImportError:
+    import glob as _glob
+    _libs = _glob.glob(str(_KERNEL_BUILD / "matmul_leakyrelu_ext*.so"))
+    if _libs:
+        torch.ops.load_library(_libs[0])
 
 
 def get_init_inputs():
@@ -40,4 +44,7 @@ class ModelNew(nn.Module):
         assert a.shape[1] == b.shape[0], "k dimension must match"
         assert a.dtype == b.dtype, "a and b must have the same dtype"
         assert a.dtype in (torch.float16, torch.int8), "dtype must be float16 or int8"
-        return _ext.run_matmul_leakyrelu(a, b)
+        out = torch.ops.npu.matmul_leakyrelu(a, b)
+        if out.dtype == torch.float32:
+            out = out.half()
+        return out

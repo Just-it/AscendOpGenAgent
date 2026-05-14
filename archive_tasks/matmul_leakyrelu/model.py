@@ -15,7 +15,10 @@ class Model(nn.Module):
             return F.leaky_relu(out, negative_slope=self.negative_slope)
 
         out = torch.matmul(a.to(torch.float32), b.to(torch.float32))
-        return F.leaky_relu(out, negative_slope=self.negative_slope)
+        out = F.leaky_relu(out, negative_slope=self.negative_slope)
+        if a.dtype == torch.float16:
+            out = out.half()
+        return out
 
 
 def get_input_groups():

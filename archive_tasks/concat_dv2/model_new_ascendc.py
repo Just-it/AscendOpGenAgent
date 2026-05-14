@@ -5,10 +5,12 @@ import torch
 import torch.nn as nn
 
 _KERNEL_BUILD = Path(__file__).resolve().parent / "kernel" / "build"
-if _KERNEL_BUILD.is_dir() and str(_KERNEL_BUILD) not in sys.path:
-    sys.path.insert(0, str(_KERNEL_BUILD))
-
-import _current_task_ext as _ext  # noqa: E402
+_LIB_PATTERN = str(_KERNEL_BUILD / "_ascend_concat_dv2_ext*")
+if _LIB_PATTERN not in "".join(sys.path):
+    import glob as _glob
+    _libs = _glob.glob(_LIB_PATTERN)
+    if _libs:
+        torch.ops.load_library(_libs[0])
 
 
 SUPPORTED_DTYPES = (
@@ -83,12 +85,12 @@ class ModelNew(nn.Module):
     def _run_kernel(self, inputs_2d):
         input_count = len(inputs_2d)
         if input_count == 1:
-            return _ext.run_concat_dim0_1(inputs_2d[0])
+            return torch.ops.npu.concat_dim0_1(inputs_2d[0])
         if input_count == 2:
-            return _ext.run_concat_dim0_2(inputs_2d[0], inputs_2d[1])
+            return torch.ops.npu.concat_dim0_2(inputs_2d[0], inputs_2d[1])
         if input_count == 3:
-            return _ext.run_concat_dim0_3(inputs_2d[0], inputs_2d[1], inputs_2d[2])
-        return _ext.run_concat_dim0_4(inputs_2d[0], inputs_2d[1], inputs_2d[2], inputs_2d[3])
+            return torch.ops.npu.concat_dim0_3(inputs_2d[0], inputs_2d[1], inputs_2d[2])
+        return torch.ops.npu.concat_dim0_4(inputs_2d[0], inputs_2d[1], inputs_2d[2], inputs_2d[3])
 
     def forward(self, inputs, concat_dim: int = 0):
         inputs_2d, tail_shape, dim0_sizes, original_dtype = self._normalize_inputs(inputs, concat_dim)

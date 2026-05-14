@@ -1,55 +1,21 @@
+// concat_dv2 op_host — tiling calculation + kernel dispatch + launch via EXEC_KERNEL_CMD
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
 
-#include <pybind11/pybind11.h>
 #include <torch/extension.h>
+#include <torch/library.h>
 
-#include "acl/acl.h"
-#include "torch_npu/csrc/core/npu/NPUStream.h"
+#include "torch_kernel_helper.h"
+#include "kernels/aclrtlaunch_concat_dim0_1.h"
+#include "kernels/aclrtlaunch_concat_dim0_2.h"
+#include "kernels/aclrtlaunch_concat_dim0_3.h"
+#include "kernels/aclrtlaunch_concat_dim0_4.h"
 
 #include "concat_dim0_tiling.h"
 
-extern "C" void concat_dim0_1_do(
-    uint32_t blockDim,
-    void *stream,
-    uint8_t *x0,
-    uint8_t *x1,
-    uint8_t *x2,
-    uint8_t *x3,
-    uint8_t *y,
-    uint8_t *tiling);
-extern "C" void concat_dim0_2_do(
-    uint32_t blockDim,
-    void *stream,
-    uint8_t *x0,
-    uint8_t *x1,
-    uint8_t *x2,
-    uint8_t *x3,
-    uint8_t *y,
-    uint8_t *tiling);
-extern "C" void concat_dim0_3_do(
-    uint32_t blockDim,
-    void *stream,
-    uint8_t *x0,
-    uint8_t *x1,
-    uint8_t *x2,
-    uint8_t *x3,
-    uint8_t *y,
-    uint8_t *tiling);
-extern "C" void concat_dim0_4_do(
-    uint32_t blockDim,
-    void *stream,
-    uint8_t *x0,
-    uint8_t *x1,
-    uint8_t *x2,
-    uint8_t *x3,
-    uint8_t *y,
-    uint8_t *tiling);
-
-namespace current_task_ext {
-
-using LaunchFn = void (*)(uint32_t, void *, uint8_t *, uint8_t *, uint8_t *, uint8_t *, uint8_t *, uint8_t *);
+namespace ascend_kernel {
 
 constexpr int32_t DEFAULT_NUM_PHYSICAL_CORES = 20;
 constexpr int32_t DEFAULT_VEC_NUM = 2;
@@ -78,12 +44,13 @@ void CheckInputTensor(const at::Tensor &tensor, const char *name, const at::Tens
     TORCH_CHECK(tensor.sizes()[1] == reference.sizes()[1], name, " must have the same trailing width as x0");
 }
 
-uint8_t *DataPtr(const at::Tensor &tensor)
-{
-    return static_cast<uint8_t *>(const_cast<void *>(tensor.storage().data()));
-}
+struct ConcatDim0LaunchData {
+    at::Tensor y;
+    at::Tensor tilingNpu;
+    int32_t usedCoreNum;
+};
 
-at::Tensor RunConcatDim0(const std::array<const at::Tensor *, 4> &inputs, int32_t inputCount, LaunchFn launch)
+ConcatDim0LaunchData PrepareConcatDim0(const std::array<const at::Tensor *, 4> &inputs, int32_t inputCount)
 {
     TORCH_CHECK(inputCount >= 1 && inputCount <= 4, "inputCount must be in [1, 4]");
 
@@ -108,7 +75,7 @@ at::Tensor RunConcatDim0(const std::array<const at::Tensor *, 4> &inputs, int32_
     const int32_t totalM = m[0] + m[1] + m[2] + m[3];
     at::Tensor y = at::empty({static_cast<int64_t>(totalM), static_cast<int64_t>(n)}, x0.options());
     if (totalM == 0 || n == 0) {
-        return y;
+        return {y, at::Tensor(), 0};
     }
 
     const int32_t blockM = ChooseBlockM(totalM);
@@ -135,46 +102,55 @@ at::Tensor RunConcatDim0(const std::array<const at::Tensor *, 4> &inputs, int32_
     tiling->tasksPerCore = tasksPerCore;
 
     auto tilingNpu = tilingCpu.to(at::kPrivateUse1);
-    auto aclStream = c10_npu::getCurrentNPUStream().stream(false);
-    launch(
-        static_cast<uint32_t>(usedCoreNum),
-        aclStream,
-        DataPtr(x0),
-        inputCount >= 2 ? DataPtr(*inputs[1]) : nullptr,
-        inputCount >= 3 ? DataPtr(*inputs[2]) : nullptr,
-        inputCount >= 4 ? DataPtr(*inputs[3]) : nullptr,
-        DataPtr(y),
-        DataPtr(tilingNpu));
-    return y;
+    return {y, tilingNpu, usedCoreNum};
 }
 
-at::Tensor run_concat_dim0_1(const at::Tensor &x0)
+at::Tensor concat_dim0_1(const at::Tensor &x0)
 {
-    return RunConcatDim0({&x0, nullptr, nullptr, nullptr}, 1, concat_dim0_1_do);
+    auto data = PrepareConcatDim0({&x0, nullptr, nullptr, nullptr}, 1);
+    if (data.y.numel() == 0) {
+        return data.y;
+    }
+    uint32_t blockDim = static_cast<uint32_t>(data.usedCoreNum);
+    EXEC_KERNEL_CMD(concat_dim0_1, blockDim,
+                    x0, nullptr, nullptr, nullptr, data.y, data.tilingNpu);
+    return data.y;
 }
 
-at::Tensor run_concat_dim0_2(const at::Tensor &x0, const at::Tensor &x1)
+at::Tensor concat_dim0_2(const at::Tensor &x0, const at::Tensor &x1)
 {
-    return RunConcatDim0({&x0, &x1, nullptr, nullptr}, 2, concat_dim0_2_do);
+    auto data = PrepareConcatDim0({&x0, &x1, nullptr, nullptr}, 2);
+    if (data.y.numel() == 0) {
+        return data.y;
+    }
+    uint32_t blockDim = static_cast<uint32_t>(data.usedCoreNum);
+    EXEC_KERNEL_CMD(concat_dim0_2, blockDim,
+                    x0, x1, nullptr, nullptr, data.y, data.tilingNpu);
+    return data.y;
 }
 
-at::Tensor run_concat_dim0_3(const at::Tensor &x0, const at::Tensor &x1, const at::Tensor &x2)
+at::Tensor concat_dim0_3(const at::Tensor &x0, const at::Tensor &x1, const at::Tensor &x2)
 {
-    return RunConcatDim0({&x0, &x1, &x2, nullptr}, 3, concat_dim0_3_do);
+    auto data = PrepareConcatDim0({&x0, &x1, &x2, nullptr}, 3);
+    if (data.y.numel() == 0) {
+        return data.y;
+    }
+    uint32_t blockDim = static_cast<uint32_t>(data.usedCoreNum);
+    EXEC_KERNEL_CMD(concat_dim0_3, blockDim,
+                    x0, x1, x2, nullptr, data.y, data.tilingNpu);
+    return data.y;
 }
 
-at::Tensor run_concat_dim0_4(const at::Tensor &x0, const at::Tensor &x1, const at::Tensor &x2, const at::Tensor &x3)
+at::Tensor concat_dim0_4(const at::Tensor &x0, const at::Tensor &x1, const at::Tensor &x2, const at::Tensor &x3)
 {
-    return RunConcatDim0({&x0, &x1, &x2, &x3}, 4, concat_dim0_4_do);
+    auto data = PrepareConcatDim0({&x0, &x1, &x2, &x3}, 4);
+    if (data.y.numel() == 0) {
+        return data.y;
+    }
+    uint32_t blockDim = static_cast<uint32_t>(data.usedCoreNum);
+    EXEC_KERNEL_CMD(concat_dim0_4, blockDim,
+                    x0, x1, x2, x3, data.y, data.tilingNpu);
+    return data.y;
 }
 
-}  // namespace current_task_ext
-
-PYBIND11_MODULE(_current_task_ext, m)
-{
-    m.doc() = "current_task concat_dim0 AscendC extension";
-    m.def("run_concat_dim0_1", &current_task_ext::run_concat_dim0_1, "");
-    m.def("run_concat_dim0_2", &current_task_ext::run_concat_dim0_2, "");
-    m.def("run_concat_dim0_3", &current_task_ext::run_concat_dim0_3, "");
-    m.def("run_concat_dim0_4", &current_task_ext::run_concat_dim0_4, "");
-}
+} // namespace ascend_kernel

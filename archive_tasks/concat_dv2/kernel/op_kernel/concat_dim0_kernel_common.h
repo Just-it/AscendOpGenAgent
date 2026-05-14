@@ -7,7 +7,7 @@
 #include "kernel_operator.h"
 
 #include "concat_dim0_tiling.h"
-#include "kernel_common.h"
+#include "concat_dv2_common.h"
 
 template <int INPUT_COUNT>
 class ConcatDim0KernelCommon {

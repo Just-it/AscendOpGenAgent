@@ -41,42 +41,7 @@ argument-hint: >
 
 ---
 
-## Hook 自动化
-
-项目配置了 Claude Code hooks 来自动执行必调脚本，减少上下文占用：
-
-| Hook 类型 | 触发条件 | 自动执行 | 产出 |
-|-----------|----------|----------|------|
-| `PostToolUse` (Write/Edit) | 写入 `model_new_tilelang.py` | `validate_tilelang_impl.py` | `.validate_tilelang_result.json` |
-| `PostToolUse` (Write/Edit) | 写入 `model_new_ascendc.py` | `validate_ascendc_impl.py` | `.validate_ascendc_result.json` |
-
-### 退化检测结果读取
-
-每次通过 Write/Edit 修改 `model_new_tilelang.py` 或 `model_new_ascendc.py` 后，hook 会自动执行对应的退化检测脚本，结果写入 `{output_dir}/.validate_{tilelang|ascendc}_result.json`。
-
-**Agent 只需读取该 JSON 文件**，无需手动执行 validate 脚本：
-
-```python
-result = json.load(open(f"{output_dir}/.validate_tilelang_result.json"))
-if result["valid"]:
-    # 通过，继续功能验证
-else:
-    # 退化，根据 result["regression_type"] 和 result["suggestion"] 修复
-```
-
-### 重量级脚本包装器
-
-| 原始脚本 | 包装器 | 摘要文件 |
-|----------|--------|----------|
-| `evaluate_ascendc.sh` | `bash .claude/hooks/wrap-evaluate.sh ascendc <output_dir>` | `.last_ascendc_eval.summary` |
-| `evaluate_tilelang.sh` | `bash .claude/hooks/wrap-evaluate.sh tilelang <output_dir>` | `.last_tilelang_eval.summary` |
-| `performance.py` | `bash .claude/hooks/wrap-performance.sh <output_dir>` | `.last_performance.summary` |
-
-包装器执行后，先读取 `.summary` 文件判断结果；如需详细信息再读取 `.log` 文件。
-
----
-
-## 工作流总览
+## 工作流
 
 ```
 Phase 0: 参数确认 + 算子分类    (解析输入，判定简单/复杂路径)
@@ -128,13 +93,10 @@ Phase 7: Trace 记录            (trace-recorder)
 
 ### 退化检测脚本
 
-| 阶段 | 触发方式 | 结果文件 | 说明 |
-|------|---------|---------|------|
-| Phase 3 (复杂) | PostToolUse hook (Write/Edit) | `.validate_tilelang_result.json` | TileLang 退化检测 — 自动执行 |
-| Phase 4 | PostToolUse hook (Write/Edit) | `.validate_ascendc_result.json` | AscendC 退化检测 — 自动执行 |
-
-> Hook 脚本: `.claude/hooks/post-write-validate.sh`
-> 原始脚本: `skills/ascendc/tilelang-designer/scripts/validate_tilelang_impl.py`, `skills/ascendc/ascendc-translator/scripts/validate_ascendc_impl.py`
+| 阶段 | 脚本路径 | 说明 |
+|------|---------|------|
+| Phase 3 | `skills/ascendc/tilelang-designer/scripts/validate_tilelang_impl.py` | TileLang 实现退化检测 |
+| Phase 4 | `skills/ascendc/ascendc-translator/scripts/validate_ascendc_impl.py` | AscendC 实现退化检测 |
 
 ---
 
@@ -453,20 +415,23 @@ while tl_iteration < max_tl_iterations:
            {output_dir}/design/tile_level/
 
     ── 3.2 AST 退化预检查 ────────────────────────────
-    读取 .validate_tilelang_result.json（由 PostToolUse hook 自动生成）
+    执行 validate_tilelang_impl.py 检测 PyTorch 退化
 
-    Read {output_dir}/.validate_tilelang_result.json
+    python skills/ascendc/tilelang-designer/scripts/validate_tilelang_impl.py \
+        {output_dir}/model_new_tilelang.py
 
-    退化 (valid != true):
-      tl_verifier_error = "A-TileLangFallback-Type{regression_type}: {suggestion}"
+    退化 (exit code != 0):
+      tl_verifier_error = "A-TileLangFallback-Type{N}: {suggestion}"
       → 跳到 3.4 Conductor
 
-    通过 (valid == true):
+    通过 (exit code == 0):
       → 继续 3.3
 
     ── 3.3 功能验证 ──────────────────────────────────
-    bash .claude/hooks/wrap-evaluate.sh tilelang {output_dir}
-    Read {output_dir}/.last_tilelang_eval.summary
+    调用 tilelang-designer skill 自带的 evaluate_tilelang.sh
+
+    bash skills/ascendc/tilelang-designer/references/evaluate_tilelang.sh \
+        {output_dir}
 
     验证通过:
       → break，Phase 3 成功，进入 Phase 4
@@ -573,24 +538,29 @@ while ac_iteration < max_ac_iterations:
            {output_dir}/model_new_ascendc.py
 
     ── 4.2 AST 退化预检查 ────────────────────────────
-    Read {output_dir}/.validate_ascendc_result.json
+    执行 validate_ascendc_impl.py 检测 PyTorch 退化
 
-    退化 (valid != true):
-      ac_verifier_error = "A-AscendCFallback-Type{regression_type}: {suggestion}"
+    python skills/ascendc/ascendc-translator/scripts/validate_ascendc_impl.py \
+        {output_dir}/model_new_ascendc.py
+
+    退化 (exit code != 0):
+      ac_verifier_error = "A-AscendCFallback-Type{N}: {suggestion}"
       → 跳到 4.4 Conductor
 
-    通过 (valid == true):
+    通过 (exit code == 0):
       → 继续 4.3
 
-    ── 4.3 编译安装 + 功能验证 ──────────────────
-    bash .claude/hooks/wrap-evaluate.sh ascendc {output_dir}
-    Read {output_dir}/.last_ascendc_eval.summary
+    ── 4.3 功能验证 ──────────────────────────────────
+    调用 ascendc-translator skill 自带的 evaluate_ascendc.sh
+
+    bash skills/ascendc/ascendc-translator/references/evaluate_ascendc.sh \
+        {output_dir}
 
     验证通过:
       → break，Phase 4 成功，进入 Phase 5
 
     验证失败:
-      ac_verifier_error = .last_ascendc_eval.summary 中的错误信息
+      ac_verifier_error = evaluate_ascendc.sh 的错误输出
       → 跳到 4.4 Conductor
 
     ── 4.4 Conductor 分析与决策 ──────────────────────
@@ -652,13 +622,7 @@ except ImportError:
 
 **流程**：
 1. **调用 performance-analyzer skill**：传入 `output_dir` 目录路径
-2. **执行性能测试**：默认测试 `reference` 和 `ascendc`，使用包装器执行以节省上下文；只有用户明确要求时才额外纳入 `tilelang`
-
-    ```bash
-    bash .claude/hooks/wrap-performance.sh {output_dir}
-    ```
-    然后读取 `{output_dir}/.last_performance.summary` 获取摘要，读取 `{output_dir}/performance.json` 获取详细数据。
-
+2. **执行性能测试**：默认测试 `reference` 和 `ascendc`，使用 `@references/performance.py` 进行对比测试；只有用户明确要求时才额外纳入 `tilelang`
 3. **获取性能报告**：记录各实现的耗时和加速比
 
 **产出**：性能分析报告，`performance.json`，记录每个 case 的加速比

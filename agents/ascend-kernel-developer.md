@@ -70,10 +70,10 @@ Phase 7: Trace 记录            (trace-recorder)
 | 退化检测 | `validate_ascendc_impl.py` | AscendC AST 退化检测 |
 | 评测脚本 | `evaluate_tilelang.sh` | TileLang 功能验证 |
 | 评测脚本 | `evaluate_ascendc.sh` | AscendC 功能验证 |
-| 构建脚本 | `utils/build_ascendc.py` | AscendC kernel 编译 |
-| 验证脚本 | `utils/verification_ascendc.py` | AscendC 正确性验证 |
-| 验证脚本 | `utils/verification_tilelang.py` | TileLang 正确性验证 |
-| 性能测试 | `performance.py` | 性能对比测试 |
+| 构建脚本 | `.claude/skills/ascendc-translator/scripts/build_ascendc.py` | AscendC kernel 编译 |
+| 验证脚本 | `.claude/skills/ascendc-translator/scripts/verification_ascendc.py` | AscendC 正确性验证 |
+| 验证脚本 | `.claude/skills/tilelang-designer/scripts/verification_tilelang.py` | TileLang 正确性验证 |
+| 性能测试 | `.claude/skills/performance-analyzer/references/performance.py` | 性能对比测试 |
 | 批处理 | `batch_run_performance.sh` | 批量性能测试 |
 
 ### Hook 行为

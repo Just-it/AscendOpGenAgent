@@ -170,7 +170,7 @@ AscendC::DataCopyPad(scaleGM_[rowIdx], scaleLocal, params);
 
 ## 6. 验证标准
 
-`utils/verification_ascendc.py` 对比 reference 与 candidate 输出：
+`.claude/skills/ascendc-translator/scripts/verification_ascendc.py` 对比 reference 与 candidate 输出：
 
 | 输出 dtype | 判定方式 |
 |---|---|

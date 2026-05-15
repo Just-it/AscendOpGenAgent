@@ -12,7 +12,7 @@ find_workdir() {
 
   local candidate="${SCRIPT_DIR}"
   while [[ "${candidate}" != "/" ]]; do
-    if [[ -f "${candidate}/utils/verification_tilelang.py" ]]; then
+    if [[ -f "${candidate}/.claude/skills/tilelang-designer/scripts/verification_tilelang.py" ]]; then
       echo "${candidate}"
       return 0
     fi
@@ -23,7 +23,7 @@ find_workdir() {
 }
 
 WORKDIR="$(find_workdir)" || {
-  echo "Unable to locate repository root containing utils/verification_tilelang.py" >&2
+  echo "Unable to locate repository root containing .claude/skills/tilelang-designer/scripts/verification_tilelang.py" >&2
   exit 1
 }
 
@@ -81,8 +81,8 @@ if [[ -d "${WORKDIR}/archive_tasks" ]]; then
   PYTHONPATH_PREFIX="${WORKDIR}/archive_tasks:${PYTHONPATH_PREFIX}"
 fi
 
-if [[ ! -f "${WORKDIR}/utils/verification_tilelang.py" ]]; then
-  echo "Missing verification script: ${WORKDIR}/utils/verification_tilelang.py" >&2
+if [[ ! -f "${WORKDIR}/.claude/skills/tilelang-designer/scripts/verification_tilelang.py" ]]; then
+  echo "Missing verification script: ${WORKDIR}/.claude/skills/tilelang-designer/scripts/verification_tilelang.py" >&2
   exit 1
 fi
 
@@ -103,7 +103,7 @@ if python -c 'import tilelang; import torch; import torch_npu' >/dev/null 2>&1; 
   cd "${WORKDIR}"
   PYTHONPATH="${PYTHONPATH_PREFIX}${PYTHONPATH:+:${PYTHONPATH}}" \
     ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES}" \
-    python utils/verification_tilelang.py "${TASK_DIR}"
+    python .claude/skills/tilelang-designer/scripts/verification_tilelang.py "${TASK_DIR}"
   exit 0
 fi
 
@@ -176,7 +176,7 @@ source set_env.sh
 cd "${CONTAINER_WORKDIR}/${REMOTE_EVAL_WORKDIR}"
 PYTHONPATH="${CONTAINER_WORKDIR}/${REMOTE_EVAL_WORKDIR}/archive_tasks:${CONTAINER_WORKDIR}/${REMOTE_EVAL_WORKDIR}\${PYTHONPATH:+:\${PYTHONPATH}}" \
 ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES}" \
-python utils/verification_tilelang.py "${TASK}"
+python .claude/skills/tilelang-designer/scripts/verification_tilelang.py "${TASK}"
 '
 EOF
 

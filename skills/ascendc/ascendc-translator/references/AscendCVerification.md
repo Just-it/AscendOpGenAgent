@@ -6,7 +6,7 @@
 bash skills/ascendc-translator/references/evaluate_ascendc.sh <task>
 ```
 
-该脚本会先调用统一构建器 `utils/build_ascendc.py` 编译 `<task>/kernel/`，再调用 `utils/verification_ascendc.py` 做 reference/candidate 对拍，不再依赖任务目录内的 `run.sh`。
+该脚本会先调用统一构建器 `.claude/skills/ascendc-translator/scripts/build_ascendc.py` 编译 `<task>/kernel/`，再调用 `.claude/skills/ascendc-translator/scripts/verification_ascendc.py` 做 reference/candidate 对拍，不再依赖任务目录内的 `run.sh`。
 
 ### model_new_ascendc.py 编写约定
 

@@ -12,7 +12,7 @@ find_workdir() {
 
   local candidate="${SCRIPT_DIR}"
   while [[ "${candidate}" != "/" ]]; do
-    if [[ -f "${candidate}/utils/verification_ascendc.py" ]]; then
+    if [[ -f "${candidate}/.claude/skills/ascendc-translator/scripts/verification_ascendc.py" ]]; then
       echo "${candidate}"
       return 0
     fi
@@ -23,7 +23,7 @@ find_workdir() {
 }
 
 WORKDIR="$(find_workdir)" || {
-  echo "Unable to locate repository root containing utils/verification_ascendc.py" >&2
+  echo "Unable to locate repository root containing .claude/skills/ascendc-translator/scripts/verification_ascendc.py" >&2
   exit 1
 }
 
@@ -64,8 +64,8 @@ if [[ -d "${WORKDIR}/archive_tasks" ]]; then
   PYTHONPATH_PREFIX="${WORKDIR}/archive_tasks:${PYTHONPATH_PREFIX}"
 fi
 
-if [[ ! -f "${WORKDIR}/utils/verification_ascendc.py" ]]; then
-  echo "Missing verification script: ${WORKDIR}/utils/verification_ascendc.py" >&2
+if [[ ! -f "${WORKDIR}/.claude/skills/ascendc-translator/scripts/verification_ascendc.py" ]]; then
+  echo "Missing verification script: ${WORKDIR}/.claude/skills/ascendc-translator/scripts/verification_ascendc.py" >&2
   exit 1
 fi
 
@@ -119,4 +119,4 @@ cd "${WORKDIR}"
 
 PYTHONPATH="${PYTHONPATH_PREFIX}${PYTHONPATH:+:${PYTHONPATH}}" \
   ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES}" \
-  python utils/verification_ascendc.py "${TASK_DIR}"
+  python .claude/skills/ascendc-translator/scripts/verification_ascendc.py "${TASK_DIR}"

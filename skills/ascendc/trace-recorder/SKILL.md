@@ -21,7 +21,6 @@ argument-hint: >
 
 回顾本次会话中的以下信息：
 - 各阶段的执行结果（成功/失败）
-- 评测脚本的输出（`@references/evaluate_tilelang.sh`、`@references/evaluate_ascendc.sh` 的返回）
 - performance-analyzer 的性能测试结果
 - Agent 的迭代过程（尝试了什么、失败了几次、最终如何解决）
 - 遇到的错误信息

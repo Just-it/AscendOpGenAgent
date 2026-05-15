@@ -776,14 +776,9 @@ def main():
     if args.output:
         # 1. 检查路径是否已经是一个存在的目录
         if os.path.isdir(args.output):
-            # 2. 目录:同时写出 preformance.json(旧名,向后兼容)与 performance.json(正确名)
-            legacy_path = os.path.join(args.output, "preformance.json")
             canonical_path = os.path.join(args.output, "performance.json")
-            with open(legacy_path, "w", encoding="utf-8") as f:
-                json.dump(report, f, indent=2, ensure_ascii=False)
             with open(canonical_path, "w", encoding="utf-8") as f:
                 json.dump(report, f, indent=2, ensure_ascii=False)
-            print(f"\nJSON report saved to: {legacy_path}")
             print(f"JSON report saved to: {canonical_path} (alias)")
         else:
             # 3. 如果不是目录,按文件路径写入

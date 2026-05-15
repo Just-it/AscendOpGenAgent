@@ -33,6 +33,7 @@ argument-hint: >
 │   ├── <op_name>.json.bak# 原始 .json 备份
 │   ├── model_new_tilelang.py # TileLang 优化实现（如存在）
 │   ├── model_new_ascendc.py  # AscendC 优化实现（如存在）
+│   └── kernel/           # AscendC kernel + whl 包
 └── <other_tasks>/        # 其他历史任务
 ```
 

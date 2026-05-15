@@ -2,7 +2,7 @@
 BASE_DIR="/home/y00889327/AscendOpGenAgent/output_0410_l2_ziji"
 
 # 定义日志文件路径
-LOG_FILE="log_preformance.txt"
+LOG_FILE="log_performance.txt"
 
 # 定义锁目录
 LOCK_DIR="/tmp/ascend_locks"

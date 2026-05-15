@@ -171,12 +171,12 @@ Phase 7: Trace 记录            (trace-recorder)
 ├── model_new_tilelang.py        # TileLang 实现 (仅复杂算子路径)
 ├── model_new_ascendc.py         # AscendC wrapper → 内部调用 torch.ops.npu.<op>()
 ├── trace.md                     # 执行 trace 记录
-├── preformance.json             # 性能汇总
+├── performance.json             # 性能汇总
 ├── .validate_tilelang_result.json
 └── .validate_ascendc_result.json
 ```
 
-**Skill 参考资料**（各 skill 独立维护，位于 `skills/ascendc/<skill-name>/`）：
+**Skill 参考资料**（各 skill 独立维护，位于 `.claude/skills/<skill-name>/`）：
 - `design-doc-generator`：design-template.md、elementwise-tiling.md、reduction-tiling.md、pooling-tiling.md、index-tiling.md、sort-tiling.md、general-tiling-principles.md、hardware-architecture.md
 - `tilelang-designer`：BlockLevelDesign.md、TileLangAscendProgrammingGuide.md、TileLangDebug.md、evaluate_tilelang.sh
 - `ascendc-translator`：dsl2Ascendc.md、TileLang-AscendC-API-Mapping.md、AscendC_knowledge/、AscendCVerification.md、evaluate_ascendc.sh
@@ -618,11 +618,11 @@ except ImportError:
     ```bash
     bash .claude/hooks/wrap-performance.sh {output_dir}
     ```
-    然后读取 `{output_dir}/.last_performance.summary` 获取摘要，读取 `{output_dir}/preformance.json` 获取详细数据。
+    然后读取 `{output_dir}/.last_performance.summary` 获取摘要，读取 `{output_dir}/performance.json` 获取详细数据。
 
 3. **获取性能报告**：记录各实现的耗时和加速比
 
-**产出**：性能分析报告，`preformance.json`，记录每个 case 的加速比
+**产出**：性能分析报告，`performance.json`，记录每个 case 的加速比
 
 ---
 

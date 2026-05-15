@@ -1,9 +1,0 @@
-FAIL (exit=1): AscendC 验证失败
-case[0]: output[0][0]: dtype(ref=torch.float32, cand=torch.float32), max_abs_diff=0.0284367, mean_abs_diff=0.000647759, MERE=0.000992758, MARE=0.00277771, threshold=0.00012207, mare_threshold=0.0012207, passed=False
-case[3]: output[3][1]: dtype(ref=torch.float16, cand=torch.float16), max_abs_diff=0.00195312, mean_abs_diff=0.00100708, MERE=0.00100422, MARE=0.00196838, threshold=0.000976562, mare_threshold=0.00976562, passed=False
-case[4]: output[4][0]: dtype(ref=torch.float32, cand=torch.float32), max_abs_diff=0.0159969, mean_abs_diff=0.00054315, MERE=0.000851187, MARE=0.00183292, threshold=0.00012207, mare_threshold=0.0012207, passed=False
-case[6]: output[6][0]: dtype(ref=torch.float32, cand=torch.float32), max_abs_diff=0.010313, mean_abs_diff=0.000651146, MERE=0.000815771, MARE=0.00256887, threshold=0.00012207, mare_threshold=0.0012207, passed=False
-case[8]: output[8][0]: dtype(ref=torch.float32, cand=torch.float32), max_abs_diff=0.0177469, mean_abs_diff=0.000696481, MERE=0.00102294, MARE=0.00260316, threshold=0.00012207, mare_threshold=0.0012207, passed=False
-case[9]: output[9][0]: dtype(ref=torch.float32, cand=torch.float32), max_abs_diff=0.0153642, mean_abs_diff=0.000693499, MERE=0.00110169, MARE=0.00221551, threshold=0.00012207, mare_threshold=0.0012207, passed=False
-case[10]: output[10][0]: dtype(ref=torch.float32, cand=torch.float32), max_abs_diff=4.64469e-05, mean_abs_diff=4.35802e-06, MERE=0.00021691, MARE=0.00028826, threshold=0.00012207, mare_threshold=0.0012207, passed=False
-case[11]: output[11][1]: dtype(ref=torch.float32, cand=torch.float32), max_abs_diff=0.227783, mean_abs_diff=0.227783, MERE=0.000720314, MARE=0.000720314, threshold=0.00012207, mare_threshold=0.0012207, passed=False

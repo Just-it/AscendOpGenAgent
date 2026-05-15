@@ -1,4 +1,0 @@
-PASS: 性能测试完成
-Per-Case Speedup (reference / ascendc)
-Case          Ref(ms)    AscendC(ms)    Speedup
-Overall speedup: 0.59x

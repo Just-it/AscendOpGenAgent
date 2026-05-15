@@ -16,7 +16,6 @@ argument-hint: >
 ## 适用场景
 
 本 skill 用于**简单算子**路径（见 CLAUDE.md 路由规则）：
-- Elementwise: ReLU, GELU, Sigmoid, Tanh, Add, Mul, Sub, Div, Abs, Exp, Log, Sqrt, ELU 等
 - Index: Index, IndexPut, Gather, Scatter, Nonzero, RepeatInterleave, EmbeddingDenseBackward
 
 **复杂算子**（Attention, MatMul 变体, RMSNorm/LayerNorm 多 strategy, Sort, TopK, 多输入融合, Pooling, Activation 等）走 TileLang 设计表达路径，不使用本 skill。

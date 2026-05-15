@@ -18,11 +18,11 @@ argument-hint: >
 - Attention: FlashAttention, SparseAttention, GQA 等
 - MatMul 变体: 带 fuse 的 MatMul (matmul+leakyrelu, quant_matmul 等)
 - Norm 变体: RMSNorm, LayerNorm (多 strategy)
-- 复杂 Index: GatherElements, Scatter (非 trivial 寻址)
+
 - Sort: Sort, TopK
 - 多输入融合: Concat, multi-tensor fused ops
 
-**简单算子**（Elementwise）走 `design-doc-generator` → `ascendc-code-gen` 路径，不使用本 skill。
+**简单算子**（Elementwise, Index 等）走 `design-doc-generator` → `ascendc-code-gen` 路径，不使用本 skill。
 
 ## 关键限制
 - 必须将核心计算融合成单个算子实现，不要拆分成多个独立算子。

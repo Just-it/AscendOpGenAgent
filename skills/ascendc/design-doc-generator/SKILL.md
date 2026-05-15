@@ -17,8 +17,9 @@ argument-hint: >
 
 本 skill 用于**简单算子**路径（见 CLAUDE.md 路由规则）：
 - Elementwise: ReLU, GELU, Sigmoid, Tanh, Add, Mul, Sub, Div, Abs, Exp, Log, Sqrt, ELU 等
+- Index: Index, IndexPut, Gather, Scatter, Nonzero, RepeatInterleave, EmbeddingDenseBackward
 
-**复杂算子**（Attention, MatMul 变体, RMSNorm/LayerNorm 多 strategy, Sort, TopK, 多输入融合, Pooling, Activation, Index 等）走 TileLang 设计表达路径，不使用本 skill。
+**复杂算子**（Attention, MatMul 变体, RMSNorm/LayerNorm 多 strategy, Sort, TopK, 多输入融合, Pooling, Activation 等）走 TileLang 设计表达路径，不使用本 skill。
 
 ## 关键限制
 - 只允许修改或新增 `{output_dir}/` 目录中的文件，不要改动其他目录中的文件。

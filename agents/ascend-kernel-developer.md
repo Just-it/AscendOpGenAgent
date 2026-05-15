@@ -112,13 +112,11 @@ Phase 7: Trace 记录            (trace-recorder)
 ```
 算子类型自动判断:
 ├─ 简单算子 → 走 design.md 路径 (跳过 TileLang)
-│   └─ Elementwise: ReLU, GELU, Sigmoid, Tanh, Add, Mul, Sub, Div, Abs, Exp, Log, Sqrt, ELU...
-│
+│   └─ Index,IndexPut,Gather,Scatter,Nonzero,RepeatInterleave,EmbeddingDenseBackward
 └─ 复杂算子 → 走 TileLang 设计表达路径
     ├─ Attention: FlashAttention, SparseAttention, GQA...
     ├─ MatMul 变体: matmul+leakyrelu, quant_matmul 等
     ├─ Norm 变体: RMSNorm, LayerNorm (多 strategy)
-    ├─ 复杂 Index: GatherElements, Scatter (非 trivial 寻址)
     ├─ Sort: Sort, TopK
     └─ 多输入融合: Concat, multi-tensor fused ops
 ```

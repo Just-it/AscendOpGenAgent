@@ -16,9 +16,11 @@ argument-hint: >
 ## 适用场景
 
 本 skill 用于**简单算子**路径（见 CLAUDE.md 路由规则）：
-- Index: Index, IndexPut, Gather, Scatter, Nonzero, RepeatInterleave, EmbeddingDenseBackward
+- Index 类: Index, IndexPut, Gather, Scatter, Nonzero, RepeatInterleave, EmbeddingDenseBackward
 
-**复杂算子**（Attention, MatMul 变体, RMSNorm/LayerNorm 多 strategy, Sort, TopK, 多输入融合, Pooling, Activation 等）走 TileLang 设计表达路径，不使用本 skill。
+**复杂算子**（Elementwise / 激活函数 / 双输入逐元素如 ReLU/Sigmoid/SiLU/GELU/SwiGLU/Add/Sub/Mul/Div、Attention、MatMul 变体、RMSNorm/LayerNorm 多 strategy、Sort、TopK、Pooling、多输入融合等）走 TileLang 设计表达路径，不使用本 skill。
+
+> 注：elementwise / 激活函数已被显式归入复杂算子路径。即使计算逻辑简单，也应通过 tilelang-designer 生成 block/tile 设计，再由 ascendc-translator 转译为 AscendC，以保证块级向量化的正确性。
 
 ## 关键限制
 - 只允许修改或新增 `{output_dir}/` 目录中的文件，不要改动其他目录中的文件。

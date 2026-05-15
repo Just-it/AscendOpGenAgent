@@ -112,15 +112,20 @@ Phase 7: Trace 记录            (trace-recorder)
 ```
 算子类型自动判断:
 ├─ 简单算子 → 走 design.md 路径 (跳过 TileLang)
-│   └─ Index,IndexPut,Gather,Scatter,Nonzero,RepeatInterleave,EmbeddingDenseBackward
+│   └─ Index 类（仅限以下算子）:
+│       Index, IndexPut, Gather, Scatter, Nonzero, RepeatInterleave, EmbeddingDenseBackward
 └─ 复杂算子 → 走 TileLang 设计表达路径
+    ├─ Elementwise / 激活函数 / 双输入逐元素:
+    │   ReLU, Sigmoid, SiLU, GELU, SwiGLU, Add, Sub, Mul, Div 等
     ├─ Attention: FlashAttention, SparseAttention, GQA...
     ├─ MatMul 变体: matmul+leakyrelu, quant_matmul 等
     ├─ Norm 变体: RMSNorm, LayerNorm (多 strategy)
     ├─ Sort: Sort, TopK
+    ├─ Pooling: AvgPool, MaxPool 等
     └─ 多输入融合: Concat, multi-tensor fused ops
 ```
 
+注：elementwise / 激活函数虽然计算简单，但在 dim 任意、形状变换（如 SwiGLU 的 chunk）、广播等场景下，需要先经过 TileLang 的 block/tile 设计表达，再转译为 AscendC，以保证块级向量化的正确性。因此它们归入复杂算子路径。
 路由判定在 Phase 0 完成后记录，后续各 Phase 根据路径选择分支。
 
 ---

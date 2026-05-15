@@ -20,6 +20,7 @@ TileLang 正确模式：
 import ast
 import argparse
 import json
+import os
 import sys
 
 
@@ -735,21 +736,25 @@ def main():
     parser = argparse.ArgumentParser(
         description="检查 TileLang 生成代码是否退化为 PyTorch 原生实现（AST 静态分析）"
     )
-    parser.add_argument("file", help="要检查的 Python 文件路径")
+    parser.add_argument("file", help="要检查的 Python 文件路径或输出目录")
     parser.add_argument("--json", action="store_true", help="JSON 格式输出")
     args = parser.parse_args()
 
+    file_path = args.file
+    if os.path.isdir(file_path):
+        file_path = os.path.join(file_path, "model_new_tilelang.py")
+
     try:
-        with open(args.file, "r", encoding="utf-8") as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             code = f.read()
     except FileNotFoundError:
         if args.json:
-            print(json.dumps({"valid": False, "error": f"文件不存在: {args.file}"}))
+            print(json.dumps({"valid": False, "error": f"文件不存在: {file_path}"}))
         else:
-            print(f"[ERROR] 文件不存在: {args.file}")
+            print(f"[ERROR] 文件不存在: {file_path}")
         sys.exit(1)
 
-    result = validate(code, filepath=args.file)
+    result = validate(code, filepath=file_path)
 
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))

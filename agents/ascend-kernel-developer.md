@@ -259,7 +259,8 @@ kernel 目录结构（后续 Phase 4 由 code-gen / translator skill 填充）�
 ├── op_kernel/
 │   └── <op_name>.cpp        # Device 端: CopyIn → Compute → CopyOut
 └── utils/
-    └── kernel_common.h      # CopyTiling 等公共工具
+    ├── torch_kernel_helper.h   # EXEC_KERNEL_CMD 宏
+    └── torch_aclnn_helper.h    # EXEC_NPU_CMD 宏
 ```
 
 ### 1.3 算子调用链（必读）

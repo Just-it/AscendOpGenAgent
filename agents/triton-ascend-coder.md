@@ -53,17 +53,22 @@ Phase 6: 会话导出          (session.jsonl + session.md)
 当用户提供的算子描述文件满足以下任一条件时，进入 **GPU Kernel 输入模式**：
 1. 文件路径包含 `TritonNPUKernelBench`
 2. 文件内容包含 `@triton.jit`（即这是一个 GPU Triton kernel，而非 PyTorch Model）
-3. 用户显式提供了 `gpu_perf_csv` 或 `pt_file` 路径
 
 **路径推导规则**（必须通过 bash 工具探测确认）：
-- `op_name` = 描述文件名去掉 `.py` 后缀
+- `op_name` 算子名称 推导:
+  - 若用户显式提供，直接使用
+  - 否则，尝试按照描述文件结构为`{op_index}_{op_name}.py`方式解析
 - `pt_file` 推导：
   - 若用户显式提供，直接使用
-  - 否则，自动查找描述文件同级目录下的 `{op_name}.pt`
+  - 否则，自动查找描述文件同级目录下的 `{op_index}_{op_name}.pt`
   - 找不到 → 报错终止
-- `gpu_perf_csv` 推导：
+- PT数据解析逻辑文件 推导：
   - 若用户显式提供，直接使用
-  - 否则，从描述文件所在目录开始**向上级目录递归查找** `vllm_gpu_perf.csv`（最多向上 3 级）
+  - 否则，自动查找描述文件统计目录下的 `original_test.py`
+  - 找不到 → 报错终止
+- GPU 性能基线文件 推导：
+  - 若用户显式提供，直接使用
+  - 否则，从描述文件所在目录开始**向上级目录递归查找** `*_gpu_perf.csv`（最多向上 3 级）
   - 找不到 → 告警并在报告中注明"未找到 GPU 性能基线"
 
 ### 工作目录创建
@@ -108,14 +113,31 @@ python3 -c "import datetime,random; ts=datetime.datetime.now().strftime('%Y%m%d_
 **不调用 `op-task-extractor` skill**，由 Agent 自身执行以下步骤：
 
 1. **读取数据源**
-   - `desc_file`：GPU kernel 源码（用户提供的 `.py`）
-   - `pt_file`：`torch.load()` 后的 dict，包含 `input_data`（必须）和可选的 `gpu_output`
+   - `desc_file`：GPU kernel 源码（用户提供的 `{算子描述}.py`）
+   - `pt_file`：包含算子所需输入，以及该输入在gpu后端执行的输出(基线)
+   - `original_test`：`torch.load(pt_file, map_location='cpu', weights_only=False)`加载后的数据，解析为kernel输入的逻辑源码
 
 2. **构建 `Model` 类**
-   - **首选方案**：若 `.pt` 中存在 `gpu_output`，构造一个 `Model` 其 `forward()` 直接返回预存的 `gpu_output`
+    - **首选方案**：基于`pt_file`以及`original_test`提供的逻辑，构造一个 `Model` 其 `forward()` 直接返回预存的 `gpu_output`
+     - **实现方式**：在 `__init__` 中加载 PT 文件并按照`original_test`提取出 `gpu_output` 存为实例属性，`forward()` 直接返回该属性
+     - **代码模板**：
+        ```python
+        class Model(nn.Module):
+            def __init__(self):
+                super().__init__()
+                data = torch.load(pt_file, map_location='cpu', weights_only=False)
+                '''
+                参考original_test.py，实现解析pt数据到kernel输入以及预期输出的逻辑
+                '''
+                self.gpu_output = gpu_output  # 根据实际 PT 结构以及处理方式处理
+ 
+            def forward(self, *args):
+                return self.gpu_output  # 直接返回预存的 GPU 输出
+        ```
+     - **注意**：每个算子的 PT 文件结构可能不同，需根据`original_test`识别提取出 `gpu_output`（如 `data['gpu_output']['logits_ptr']`）
+
      - 此时 framework 延迟将直接替换为 GPU 参考延迟，不再额外标注说明
-   - **兜底方案**：若 `.pt` 中不存在 `gpu_output`，则根据 `@triton.jit` kernel 的语义，手写一个等价的纯 PyTorch 参考实现
-     - 若 kernel 逻辑过于复杂无法精确翻译，报错终止并提示用户补充 `gpu_output`
+     - 若 从PT 文件中无法识别出算子的输入输出，则跳转到phase 5，生成report.md中表明pt文件异常
 
 3. **构建输入函数**
    - `get_inputs()`：按 kernel 参数顺序从 `input_data` 构造列表，返回 `[tensor1, tensor2, scalar1, ...]`
@@ -249,7 +271,7 @@ while iteration < max_iterations:
 
     调用 kernel-verifier skill (benchmark.py)
 
-    **GPU Kernel 模式**：需附加 `--skip_framework --framework_latency_ms <gpu_reference_ms>`，其中 `gpu_reference_ms` 由 `vllm_gpu_perf.csv` 中的 `Duration(us)` 转换而来（除以 1000）。避免对无意义的预存 GPU 输出 Model 进行 profiling。
+    **GPU Kernel 模式**：需附加 `--skip_framework --framework_latency_ms <gpu_reference_ms>`，其中 `gpu_reference_ms` 由 `*_gpu_perf.csv` 中的 `Duration(us)` 转换而来（除以 1000）。避免对无意义的预存 GPU 输出 Model 进行 profiling。
 
     产物 → {工作目录}/output/iter_{iteration}/perf_result.json
     复制 → {工作目录}/output/perf_result.json
@@ -424,7 +446,11 @@ while True:
       `triton_impl_name` 字段，原样复制即可；下游判定仅依赖 `speedup_vs_torch`
       （几何平均加速比），不关心文件名前缀。
 
+<<<<<<< Updated upstream
     **GPU Kernel 模式**：优化侧 benchmark 仍需附加 `--skip_framework --framework_latency_ms <gpu_reference_ms>`，其中 `gpu_reference_ms` 从 `vllm_gpu_perf.csv` 读取并转换为毫秒。非 GPU 模式保持原样。基线侧因为是复制 Phase 3 结果，天然继承 Phase 3 时的参数配置，无需额外处理。
+=======
+    **GPU Kernel 模式**：优化侧 benchmark 仍需附加 `--skip_framework --framework_latency_ms <gpu_reference_ms>`，其中 `gpu_reference_ms` 从 `*_gpu_perf.csv` 读取并转换为毫秒。非 GPU 模式保持原样。基线侧因为是复制 Phase 3 结果，天然继承 Phase 3 时的参数配置，无需额外处理。
+>>>>>>> Stashed changes
 
     优化侧: benchmark.py --triton_impl_name triton_optimized [--skip_framework ...]
       → optimized_perf_result.json
@@ -500,7 +526,11 @@ while True:
   `output/iter_{phase3_last_iter}/verify/verify_result.json` 读取。
   ⚠️ **禁止**从 `perf_result.json` 取 passed_cases —— 后者是"benchmark exec 成功数"
   （进程未崩溃即算 pass），与"精度通过数"语义不同；精度错的 kernel 仍可能 benchmark 成功。
+<<<<<<< Updated upstream
 - **GPU 参考性能**（仅在 GPU Kernel 模式下且找到 `gpu_perf_csv` 时显示）：
+=======
+- **GPU 参考性能**（仅在 GPU Kernel 模式下且找到 `*_perf_csv` 时显示）：
+>>>>>>> Stashed changes
   - GPU 参考延迟
   - Ascend Triton 延迟
   - Ascend/GPU 倍数
@@ -591,7 +621,7 @@ while True:
 
 **字段说明**：
 - `gpu_mode`: `true` 表示本次任务源自 GPU Kernel 输入模式
-- `perf_data.gpu_reference_ms`: 从 `vllm_gpu_perf.csv` 读取的 GPU 参考延迟（毫秒）
+- `perf_data.gpu_reference_ms`: 从 `*_gpu_perf.csv` 读取的 GPU 参考延迟（毫秒）
 - `perf_data.ascend_vs_gpu_ratio`: Ascend Triton 延迟 / GPU 延迟 的倍数
 - `per_shape_results` 中的每个元素也包含 `gpu_reference_ms` 和 `ascend_vs_gpu_ratio`
 - **所有原有字段必须完整保留**，确保批量评测脚本不受破坏
@@ -631,6 +661,26 @@ Phase 4 失败时（Phase 3 成功，优化未成功）：
   }
 }
 ```
+### 6 会话导出（session.jsonl + session.md）
+
+Phase 5 **最末尾**（`summary.json`、`report.md` 写完之后）执行，将当前 Claude Code 会话归档到工作目录，便于复盘。放在最末尾是为了最大化 jsonl 完整性——仍会缺失本步骤之后的极少量消息，可接受。
+
+并行批量执行（`run_benchmark_triton.sh --npu-list`）下，多个子进程共用同一个 `/root/.claude/projects/<hash>/` 目录，**必须用工作目录路径精确过滤**，禁止用时间排序（`ls -t | head -1` 会错拿到其它并发子进程的 jsonl）。
+
+```bash
+# 用工作目录绝对路径作为唯一标记定位自己的 session jsonl
+MY_JSONL=$(grep -l "{工作目录}" /root/.claude/projects/*/*.jsonl 2>/dev/null | head -1)
+if [ -n "$MY_JSONL" ]; then
+  cp "$MY_JSONL" {工作目录}/session.jsonl
+  python3 ./utils/render_session.py \
+    {工作目录}/session.jsonl {工作目录}/session.md 2>&1 || \
+    echo "WARN: session render failed (non-fatal)"
+else
+  echo "WARN: session jsonl not located (non-fatal)"
+fi
+```
+
+⚠️ 渲染失败 / 定位失败均不阻塞任务，仅告警。
 
 ## Phase 6: 会话导出（session.jsonl + session.md）
 
@@ -729,7 +779,7 @@ agent 收到 exit 2 时，必须按下表把它**等价映射**到对应 verify 
 
 | 约束 | 说明 |
 |------|------|
-| GPU Kernel 模式 | `.pt` 必须与 `.py` 同名同目录；`vllm_gpu_perf.csv` 向上查找最多 3 级 |
+| GPU Kernel 模式 | `.pt` 必须与 `.py` 同名同目录；`*_gpu_perf.csv` 向上查找最多 3 级 |
 | Phase 3 最大迭代 | 5 次，禁止超出 |
 | Phase 4 迭代策略 | 不做最大迭代次数限制，直到 latency-optimizer 报告无更多优化点则退出 |
 | Phase 4 成功底线 | 性能不劣化（speedup_vs_baseline ≥ 1.0） |

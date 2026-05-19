@@ -210,6 +210,9 @@ if [[ "$USE_PARALLEL" == true ]]; then
 
                     mkdir -p "$TARGET_OP_DIR"
 
+                    # 预生成 session-id，调用后按 SID 精确取 jsonl，避免 ls -t 竞态
+                    SID=$(python3 -c 'import uuid;print(uuid.uuid4())')
+
                     START_TIME=$(date +%s)
 
                     if [[ -f "$json_file" ]]; then
@@ -219,6 +222,7 @@ if [[ "$USE_PARALLEL" == true ]]; then
                     fi
 
                     if claude -p "$PROMPT" \
+                        --session-id "$SID" \
                         --allowedTools 'Bash(*)' 'Read(*)' 'Write(*)' 'Edit(*)' 'Glob(*)' 'Grep(*)' 'Skill(*)' \
                         >> "${OUTPUT_DIR}/npu_${npu}.log" 2>&1; then
 
@@ -251,19 +255,16 @@ if [[ "$USE_PARALLEL" == true ]]; then
                         STATUS="fail"
                     fi
 
-                    # 串行重命名思维轨迹文件（带时间戳防止同名覆盖）
-                    {
-                        flock -x 201
-                        LATEST_JSONL=$(ls -t "$CLAUDE_PROJECT_DIR"/*.jsonl 2>/dev/null | head -1)
-                        if [[ -n "$LATEST_JSONL" && -f "$LATEST_JSONL" ]]; then
-                            BASENAME=$(basename "$LATEST_JSONL" .jsonl)
-                            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-                            mv "$LATEST_JSONL" "${CLAUDE_PROJECT_DIR}/${op_name}_${STATUS}_${TIMESTAMP}.jsonl"
-                            if [[ -d "${CLAUDE_PROJECT_DIR}/${BASENAME}" ]]; then
-                                mv "${CLAUDE_PROJECT_DIR}/${BASENAME}" "${CLAUDE_PROJECT_DIR}/${op_name}_${STATUS}_${TIMESTAMP}"
-                            fi
-                        fi
-                    } 201>"${OUTPUT_DIR}/.trace_lock"
+                    # 按 session-id 精确搬运思维轨迹（无需 flock，无竞态）
+                    SRC_JSONL="${CLAUDE_PROJECT_DIR}/${SID}.jsonl"
+                    if [[ -f "$SRC_JSONL" ]]; then
+                        mv "$SRC_JSONL" "${TARGET_OP_DIR}/session.jsonl"
+                    else
+                        echo "[NPU $npu] ⚠ 未找到 session jsonl: ${SRC_JSONL}" >&2
+                    fi
+                    if [[ -d "${CLAUDE_PROJECT_DIR}/${SID}" ]]; then
+                        mv "${CLAUDE_PROJECT_DIR}/${SID}" "${TARGET_OP_DIR}/session_dir"
+                    fi
                 done
                 # ========== Worker 进程结束 ==========
             ) &
@@ -310,6 +311,9 @@ else
 
         START_TIME=$(date +%s)
 
+        # 预生成 session-id，调用后按 SID 精确取 jsonl
+        SID=$(python3 -c 'import uuid;print(uuid.uuid4())')
+
         if [[ -f "$json_file" ]]; then
             PROMPT="生成一个基于 Triton-Ascend 框架的算子，参考${file}和${json_file}。目标设备架构为${ARCH}，使用NPU=${NPU_ID}，请将生成的代码文件输出至${TARGET_OP_DIR}/目录下。"
         else
@@ -317,6 +321,7 @@ else
         fi
 
         if claude -p "$PROMPT" \
+            --session-id "$SID" \
             --allowedTools 'Bash(*)' 'Read(*)' 'Write(*)' 'Edit(*)' 'Glob(*)' 'Grep(*)' 'Skill(*)'; then
             END_TIME=$(date +%s)
             ELAPSED=$((END_TIME - START_TIME))
@@ -333,15 +338,15 @@ else
             STATUS="fail"
         fi
 
-        # 重命名思维轨迹文件（带时间戳防止同名覆盖）
-        LATEST_JSONL=$(ls -t "$CLAUDE_PROJECT_DIR"/*.jsonl 2>/dev/null | head -1)
-        if [[ -n "$LATEST_JSONL" && -f "$LATEST_JSONL" ]]; then
-            BASENAME=$(basename "$LATEST_JSONL" .jsonl)
-            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-            mv "$LATEST_JSONL" "${CLAUDE_PROJECT_DIR}/${op_name}_${STATUS}_${TIMESTAMP}.jsonl"
-            if [[ -d "${CLAUDE_PROJECT_DIR}/${BASENAME}" ]]; then
-                mv "${CLAUDE_PROJECT_DIR}/${BASENAME}" "${CLAUDE_PROJECT_DIR}/${op_name}_${STATUS}_${TIMESTAMP}"
-            fi
+        # 按 session-id 精确搬运思维轨迹
+        SRC_JSONL="${CLAUDE_PROJECT_DIR}/${SID}.jsonl"
+        if [[ -f "$SRC_JSONL" ]]; then
+            mv "$SRC_JSONL" "${TARGET_OP_DIR}/session.jsonl"
+        else
+            echo "[NPU ${NPU_ID}] ⚠ 未找到 session jsonl: ${SRC_JSONL}"
+        fi
+        if [[ -d "${CLAUDE_PROJECT_DIR}/${SID}" ]]; then
+            mv "${CLAUDE_PROJECT_DIR}/${SID}" "${TARGET_OP_DIR}/session_dir"
         fi
     done
 fi

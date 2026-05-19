@@ -118,6 +118,8 @@
 
 ### NPUKernelBench 评测子集列表
 
+**Level 0** (20 tasks)：1-20
+
 **Level 1** (31 tasks)：1-31
 
 **Level 2** (30 tasks)：1-30
@@ -125,18 +127,18 @@
 ### AscendC基线结果
 
 **评测环境**
-- 更新时间：2026-04-15
+- 分支：br_430 @ latest
+- 更新时间：2026-04-30
 - 硬件：Atlas A2 服务器
-- 软件栈：CANN 8.0, PyTorch 2.1
-- 评测范围：Level 1 (1-31) + Level 2 (1-30)
-- Agent：Asc算子生成Agent @kimi2.6
+- 软件栈：CANN 8.5.1, PyTorch 2.9.0
+- 评测范围：所有Vector任务 (Level1 和 Level2) 61个和430商发算子 ( level0 ) 20个
 
 **综合评测结果**
 | 指标 | 结果 |
 |------|------|
-| **综合精度通过率** | 45/61 (73.7%) |
-| **综合性能≥0.6x达标** | 21/61 (34%) |
-| **综合性能≥0.8x达标** | 19/61 (31%) |
+| **综合精度通过率** | 81/81 (100%) |
+| **综合性能≥0.6x达标** | 54/81 (67%) |
+| **综合性能≥0.8x达标** | 39/81 (48%) |
 
 
 
@@ -144,67 +146,87 @@
 
 | Level | Problem ID | 算子名称 | 算子类型 | 编译通过 | 精度正确 | PyTorch 参考延迟(ms) | 生成AscendC代码延迟(ms) | 加速比 | 最终状态 | 精度正确 | 性能 0.6x 达标 | 性能 0.8x 达标 | 备注 |
 |:---|:---:|---------|:-------:|:------:|:------:|-------------:|---------------:|--------:|:-------:|:-------:|:-------:|:-------:|:---|
-| 1 | 1 | GELU | VECTOR | ✅ | ✅ | 0.125 | 0.306 | 0.41 | 成功 | ✅ | ❌ | ❌ | |
-| 1 | 2 | SwiGLU | VECTOR | ✅ | ✅ | 0.179 | 0.309 | 0.58 | 成功 | ✅ | ❌ | ❌ | |
-| 1 | 3 | Add | VECTOR | ✅ | ✅ | 0.148 | 0.549 | 0.27 | 成功 | ✅ | ❌ | ❌ | |
-| 1 | 4 | Abs | VECTOR | ✅ | ✅ | 0.139 | 0.34 | 0.41 | 成功 | ✅ | ❌ | ❌ | |
-| 1 | 5 | Cumsum | VECTOR | ✅ | ❌ | 0.45 | 0.616 | 0.73 | 失败 | ❌ | ❌ | ❌ | 全量验证 47/51 |
-| 1 | 6 | Histc | VECTOR | ✅ | ✅ | 0.189 | 0.756 | 0.25 | 成功 | ✅ | ❌ | ❌ | |
-| 1 | 7 | Sum | VECTOR | ✅ | ✅ | 0.132 | 0.473 | 0.28 | 成功 | ✅ | ❌ | ❌ | |
-| 1 | 8 | Sort | VECTOR | ✅ | ❌ | \ | \ | \ | 失败 | ❌ | ❌ | ❌ | 精简用例通过，全量用例因硬件 ReduceMax N-limit 失败 |
-| 1 | 9 | TopK | VECTOR | ✅ | ✅ | 0.447 | 2.214 | 0.20 | 成功 | ✅ | ❌ | ❌ | AscendC ReduceMax 对 reduce 轴长度 |
-| 1 | 10 | LayerNorm | VECTOR | ✅ | ✅ | 0.247 | 0.514 | 0.48 | 成功 | ✅ | ❌ | ❌ | |
-| 1 | 11 | GroupNorm | VECTOR | ✅ | ✅ | 0.603 | 0.718 | 0.84 | 成功 | ✅ | ✅ | ✅ | 大 shape 表现- Reference: 3.740 ms- TileLang:0.888 ms (4.21x) - AscendC: 0.807 ms (4.63x) |
-| 1 | 12 | Permute | VECTOR | ✅ | ❌ | \ | \ | \ | 失败 | ❌ | ❌ | ❌ | |
-| 1 | 13 | Cat | VECTOR | ✅ | ✅ | 3.36 | 0.792 | 4.24 | 成功 | ✅ | ✅ | ✅ | |
-| 1 | 14 | Split | VECTOR | ✅ | ✅ | 0.064 | 0.639 | 0.10 | 成功 | ✅ | ❌ | ❌ | |
-| 1 | 15 | Pad | VECTOR | ✅ | ✅ | 1 | 3.268 | 0.31 | 成功 | ✅ | ❌ | ❌ | |
-| 1 | 16 | Repeat | VECTOR | ✅ | ❌ | 0.216 | 1.027 | 0.21 | 失败 | ❌ | ❌ | ❌ | 部分通过 |
-| 1 | 17 | AdamW | VECTOR | ✅ | ✅ | 1.566 | 1.144 | 1.25 | 成功 | ✅ | ✅ | ✅ | |
-| 1 | 18 | Index | VECTOR | ✅ | ✅ | 0.098 | 0.656 | 0.15 | 成功 | ✅ | ❌ | ❌ | |
-| 1 | 19 | IndexPut | VECTOR | ✅ | ❌ | 0.149 | 0.676 | 0.22 | 失败 | ❌ | ❌ | ❌ | 部分通过 |
-| 1 | 20 | Gather | VECTOR | ✅ | ✅ | 0.633 | 1.623 | 0.39 | 成功 | ✅ | ❌ | ❌ | |
-| 1 | 21 | Scatter | VECTOR | ✅ | ✅ | 29.8 | 6.652 | 4.48 | 成功 | ✅ | ✅ | ✅ | |
-| 1 | 22 | Nonzero | VECTOR | ✅ | ✅ | 71.07 | 11.93 | 5.96 | 成功 | ✅ | ✅ | ✅ | |
-| 1 | 23 | RepeatInterleave | VECTOR | ✅ | ❌ | 0.584 | 1.771 | 0.33 | 失败 | ❌ | ❌ | ❌ | 部分通过 |
-| 1 | 24 | EmbeddingDenseBackward | VECTOR | ✅ | ✅ | 3.324 | 3.246 | 1.02 | 成功 | ✅ | ✅ | ✅ | |
-| 1 | 25 | NLLLoss | VECTOR | ✅ | ✅ | 37.35 | 12.66 | 2.95 | 成功 | ✅ | ✅ | ✅ | |
-| 1 | 26 | AvgPool3d | VECTOR | ✅ | ✅ | 0.49 | 0.86 | 0.57 | 成功 | ✅ | ❌ | ❌ | |
-| 1 | 27 | MaxPool3d | VECTOR | ✅ | ✅ | 62.44 | 22.42 | 1.00 | 成功 | ✅ | ✅ | ✅ | |
-| 1 | 28 | Interpolate | VECTOR | ✅ | ✅ | 0.56 | 5.6 | 0.10 | 成功 | ✅ | ❌ | ❌ | |
-| 1 | 29 | DynamicQuant | VECTOR | ✅ | ❌ | \ | \ | \ | 失败 | ❌ | ❌ | ❌ | |
-| 1 | 30 | NMS | VECTOR | ✅ | ❌ | \ | \ | \ | 失败 | ❌ | ❌ | ❌ | |
-| 1 | 31 | IOU | VECTOR | ✅ | ✅ | 2.229 | 1.044 | 2.13 | 成功 | ✅ | ✅ | ✅ | |
-| 2 | 1 | RotaryMul | VECTOR | ✅ | ✅ | 0.048 | 0.095 | 0.51 | 成功 | ✅ | ❌ | ❌ | |
-| 2 | 2 | GroupNormSwish | VECTOR | ✅ | ✅ | 0.048 | 0.137 | 0.35 | 成功 | ✅ | ❌ | ❌ | |
-| 2 | 3 | AdvanceStepFlashattn | VECTOR | ✅ | ✅ | 0.038 | 0.059 | 0.64 | 成功 | ✅ | ✅ | ❌ | |
-| 2 | 4 | MoeInitRouting | VECTOR | ✅ | ✅ | 0.045 | 47.42 | 0.00 | 成功 | ✅ | ❌ | ❌ | |
-| 2 | 5 | MoeComputeExpertTokens | VECTOR | ✅ | ✅ | 0.044 | 0.093 | 0.47 | 成功 | ✅ | ❌ | ❌ | |
-| 2 | 6 | MoeFinalizeRouting | VECTOR | ✅ | ✅ | 0.069 | 0.207 | 0.34 | 成功 | ✅ | ❌ | ❌ | |
-| 2 | 7 | MoeGatingTopKSoftmax | VECTOR | ✅ | ✅ | 1.178 | 124.553 | 0.01 | 成功 | ✅ | ❌ | ❌ | |
-| 2 | 8 | QuantScatter | VECTOR | ✅ | ✅ | 0.653 | 0.757 | 0.86 | 成功 | ✅ | ✅ | ✅ | |
-| 2 | 9 | TopKTopP | VECTOR | ❌ | ❌ | \ | \ | \ | 失败 | ❌ | ❌ | ❌ | |
-| 2 | 10 | SwigluQuant | VECTOR | ✅ | ✅ | 0.084 | 4.079 | 0.02 | 成功 | ✅ | ❌ | ❌ | |
-| 2 | 11 | DequantSwigluQuant | VECTOR | ❌ | ❌ | \ | \ | \ | 失败 | ❌ | ❌ | ❌ | |
-| 2 | 12 | KvRmsnormRopeCache | VECTOR | ❌ | ❌ | \ | \ | \ | 失败 | ❌ | ❌ | ❌ | |
-| 2 | 13 | InterleaveRope | VECTOR | ✅ | ✅ | 0.08 | 0.187 | 0.43 | 成功 | ✅ | ❌ | ❌ | |
-| 2 | 14 | AdaptiveInstanceNormalization2DBackward | VECTOR | ✅ | ✅ | 0.358 | 0.261 | 1.37 | 成功 | ✅ | ✅ | ✅ | |
-| 2 | 15 | AttentionSoftmaxWithSoftcappingAndDropout | VECTOR | ✅ | ✅ | 0.182 | 0.36 | 0.50 | 成功 | ✅ | ❌ | ❌ | |
-| 2 | 16 | Batched2DRopePositionEncodingBackward | VECTOR | ✅ | ✅ | 0.116 | 0.521 | 0.22 | 成功 | ✅ | ❌ | ❌ | |
-| 2 | 17 | EmbeddingWithInitialLayernormBackward | VECTOR | ✅ | ✅ | 2.281 | 2.802 | 0.81 | 成功 | ✅ | ✅ | ✅ | |
-| 2 | 18 | FusedAddRmsnorm | VECTOR | ✅ | ✅ | 0.145 | 0.098 | 1.48 | 成功 | ✅ | ✅ | ✅ | |
-| 2 | 19 | FusedResidualRmsNormBackward | VECTOR | ✅ | ✅ | 0.289 | 0.285 | 1.00 | 成功 | ✅ | ✅ | ✅ | |
-| 2 | 20 | FusedRopeWithQkNormAndKvCacheUpdate | VECTOR | ❌ | ❌ | \ | \ | \ | 失败 | ❌ | ❌ | ❌ | |
-| 2 | 21 | GaussianTopkSparseActivation | VECTOR | ✅ | ✅ | 0.748 | 0.127 | 5.89 | 成功 | ✅ | ✅ | ✅ | |
-| 2 | 22 | HybridAttentionMaskPreparation | VECTOR | ✅ | ✅ | 3.852 | 0.194 | 19.86 | 成功 | ✅ | ✅ | ✅ | |
-| 2 | 23 | HyenaFftSizePaddingRfft | VECTOR | ✅ | ✅ | 0.809 | 7.262 | 0.11 | 成功 | ✅ | ❌ | ❌ | |
-| 2 | 24 | KvCacheUpdateWithRopeBackward | VECTOR | ✅ | ✅ | 1.449 | 1.501 | 0.97 | 成功 | ✅ | ✅ | ✅ | 耗时太长7841s |
-| 2 | 25 | MaskedSoftmaxWithAttentionDropoutBackward | VECTOR | ✅ | ✅ | 0.108 | 0.131 | 0.82 | 成功 | ✅ | ✅ | ✅ | |
-| 2 | 26 | MoeGroupScoreAggregationAndMasking | VECTOR | ❌ | ❌ | \ | \ | \ | 失败 | ❌ | ❌ | ❌ | |
-| 2 | 27 | MultiMaskAttentionAggregation | VECTOR | ❌ | ❌ | \ | \ | \ | 失败 | ❌ | ❌ | ❌ | |
-| 2 | 28 | MultimodalRopePositionComputationWithGridBasedIndexing | VECTOR | ✅ | ✅ | 1.948 | 2.095 | 0.93 | 成功 | ✅ | ✅ | ✅ | 耗时太长19031s |
-| 2 | 29 | TanhGatedResidualAddBackward | VECTOR | ❌ | ❌ | \ | \ | \ | 失败 | ❌ | ❌ | ❌ | |
-| 2 | 30 | TimeDecayExponentialStabilization | VECTOR | ❌ | ❌ | \ | \ | \ | 失败 | ❌ | ❌ | ❌ | |
+| 0 | 1 | LogicalAnd | 数学计算 | ✅ | ✅ | 0.0348 | 0.0475 | 0.73 | 成功 | ✅ | ✅ | ❌ | |
+| 0 | 2 | FloorDivide | 数学计算 | ✅ | ✅ | 0.02434 | 0.03462 | 0.70 | 成功 | ✅ | ✅ | ❌ | |
+| 0 | 3 | LogicalNot | 数学计算 | ✅ | ✅ | 0.01927 | 0.01567 | 1.23 | 成功 | ✅ | ✅ | ✅ | |
+| 0 | 4 | LogicalOr | 数学计算 | ✅ | ✅ | 0.03701 | 0.04204 | 0.88 | 成功 | ✅ | ✅ | ✅ | |
+| 0 | 5 | Mish | 数学计算 | ✅ | ✅ | 0.005987 | 0.00615 | 0.97 | 成功 | ✅ | ✅ | ✅ | |
+| 0 | 6 | RealDiv | 数学计算 | ✅ | ✅ | 0.006653 | 0.009698 | 0.68 | 成功 | ✅ | ✅ | ❌ | |
+| 0 | 7 | Hardsigmoid | 激活函数 | ✅ | ✅ | 0.003417 | 0.005199 | 0.66 | 成功 | ✅ | ✅ | ❌ | |
+| 0 | 8 | HardsigmoidBackward | 激活函数 | ✅ | ✅ | 0.005108 | 0.007714 | 0.66 | 成功 | ✅ | ✅ | ❌ | |
+| 0 | 9 | MishBackward | 激活函数 | ✅ | ✅ | 0.01038 | 0.01361 | 0.76 | 成功 | ✅ | ✅ | ❌ | |
+| 0 | 10 | Relu | 激活函数 | ✅ | ✅ | 0.002425 | 0.003648 | 0.66 | 成功 | ✅ | ✅ | ❌ | |
+| 0 | 11 | Sigmoid | 激活函数 | ✅ | ✅ | 0.002554 | 0.003738 | 0.68 | 成功 | ✅ | ✅ | ❌ | |
+| 0 | 12 | Swish | 激活函数 | ✅ | ✅ | 0.01138 | 0.01276 | 0.89 | 成功 | ✅ | ✅ | ✅ | |
+| 0 | 13 | Elu | 激活函数 | ✅ | ✅ | 0.01862 | 0.006367 | 2.93 | 成功 | ✅ | ✅ | ✅ | |
+| 0 | 14 | EluBackward | 激活函数 | ✅ | ✅ | 0.01772 | 0.02136 | 0.83 | 成功 | ✅ | ✅ | ✅ | |
+| 0 | 15 | GtTensor | 数学计算 | ✅ | ✅ | 0.008588 | 0.01225 | 0.70 | 成功 | ✅ | ✅ | ❌ | |
+| 0 | 16 | Hardswish | 激活函数 | ✅ | ✅ | 0.002725 | 0.004444 | 0.61 | 成功 | ✅ | ✅ | ❌ | |
+| 0 | 17 | LogAddExp | 数学计算-BroadCast | ✅ | ✅ | 0.02306 | 0.02783 | 0.83 | 成功 | ✅ | ✅ | ✅ | |
+| 0 | 18 | NeScalar | 数学计算 | ✅ | ✅ | 0.01352 | 0.008797 | 1.54 | 成功 | ✅ | ✅ | ✅ | |
+| 0 | 19 | Threshold | 数学计算 | ✅ | ✅ | 0.009488 | 0.007623 | 1.24 | 成功 | ✅ | ✅ | ✅ | |
+| 0 | 20 | ReluBackward | 激活函数 | ✅ | ✅ | 0.00676 | 0.00645 | 1.05 | 成功 | ✅ | ✅ | ✅ | |
+| 1 | 1 | GELU | vector | ✅ | ✅ | 0.086 | 0.186 | 0.13 | 成功 | ✅ | ❌ | ❌ |  |
+| 1 | 2 | SwiGLU | vector | ✅ | ✅ | 0.017 | 0.179 | 0.095 | 成功 | ✅ | ❌ | ❌ |  |
+| 1 | 3 | Add | vector | ✅ | ✅ | 0.086 | 0.186 | 0.48 | 成功 | ✅ | ❌ | ❌ |  |
+| 1 | 4 | Abs | vector | ✅ | ✅ | 0.00237 | 0.05417 | 0.04 | 成功 | ✅ | ❌ | ❌ |  |
+| 1 | 5 | Cumsum | vector | ✅ | ✅ | 316.57 | 0.38 | 253.04 | 成功 | ✅ | ✅ | ✅ |  |
+| 1 | 6 | Histc | vector | ✅ | ✅ | 0.062 | 0.0015 | 35.01 | 成功 | ✅ | ✅ | ✅ |  |
+| 1 | 7 | Sum | vector | ✅ | ✅ | 0.0515 | 0.1851 | 0.20 | 成功 | ✅ | ❌ | ❌ |  |
+| 1 | 8 | Sort | vector | ✅ | ✅ | 0.086 | 0.186 | 2.56 | 成功 | ✅ | ✅ | ✅ |  |
+| 1 | 9 | TopK | vector | ✅ | ✅ | 0.363 | 12.383 | 0.03 | 成功 | ✅ | ❌ | ❌ |  |
+| 1 | 10 | LayerNorm | vector | ✅ | ✅ | 0.247 | 0.514 | 0.48 | 成功 | ✅ | ❌ | ❌ |  |
+| 1 | 11 | GroupNorm | vector | ✅ | ✅ | 0.266 | 0.290 | 0.69 | 成功 | ✅ | ✅ | ❌ |  |
+| 1 | 12 | Permute | vector | ✅ | ✅ | 0.177 | 418.3 | 0.0004 | 成功 | ✅ | ❌ | ❌ |  |
+| 1 | 13 | Cat_Opus | vector | ✅ | ✅ | 3.36 | 0.792 | 4.24 | 成功 | ✅ | ✅ | ✅ |  |
+| 1 | 14 | Split | vector | ✅ | ✅ | 0.019 | 37.33 | 0.15 | 成功 | ✅ | ❌ | ❌ |  |
+| 1 | 15 | Pad | vector | ✅ | ✅ | 0.386 | 110.42 | 0.70 | 成功 | ✅ | ✅ | ❌ |  |
+| 1 | 16 | Repeat | vector | ✅ | ✅ | 0.097 | 0.151 | 0.64 | 成功 | ✅ | ✅ | ❌ |  |
+| 1 | 17 | AdamW | vector | ✅ | ✅ | 33.92 | 6.52 | 5.20 | 成功 | ✅ | ✅ | ✅ |  |
+| 1 | 18 | Index | vector | ✅ | ✅ | 0.027 | 0.030 | 20.44 | 成功 | ✅ | ✅ | ✅ |  |
+| 1 | 19 | IndexPut | vector | ✅ | ✅ | 0.149 | 0.676 | 0.22 | 成功 | ✅ | ❌ | ❌ |  |
+| 1 | 20 | Gather | vector | ✅ | ✅ | 0.086 | 0.186 | 0.63 | 成功 | ✅ | ✅ | ❌ |  |
+| 1 | 21 | Scatter | vector | ✅ | ✅ | 29.8 | 6.652 | 4.48 | 成功 | ✅ | ✅ | ✅ | |
+| 1 | 22 | Nonzero | vector | ✅ | ✅ | 9.99 | 15.09 | 0.58 | 成功 | ✅ | ❌ | ❌ |  |
+| 1 | 23 | RepeatInterleave | vector | ✅ | ✅ | 0.047 | 0.209 | 0.33 | 成功 | ✅ | ❌ | ❌ |  |
+| 1 | 24 | EmbeddingDenseBackward | vector | ✅ | ✅ | 3.324 | 3.246 | 1.02 | 成功 | ✅ | ✅ | ✅ |  |
+| 1 | 25 | NLLLoss | vector | ✅ | ✅ | 0.086 | 0.009 | 9.74 | 成功 | ✅ | ✅ | ✅ |  |
+| 1 | 26 | AvgPool3d | vector | ✅ | ✅| 0.37 | 0.17 | 0.46 | 成功 |✅ | ❌ | ❌ |  |
+| 1 | 27 | MaxPool3d | vector | ✅ | ✅ | 3.2564 | 0.0508 | 64.12 | 成功 | ✅ | ✅ | ✅ |  |
+| 1 | 28 | Interpolate | vector | ✅ | ✅ | 0.186 | 0.191 | 0.97 | 成功 | ✅ | ✅ | ✅ |  |
+| 1 | 29 | DynamicQuant | vector | ✅ | ✅ | 0.139 | 0.623 | 0.22 | 成功 | ✅ | ❌ | ❌ |  |
+| 1 | 30 | NMS | vector | ✅ | ✅ | 5.5371 | 0.0024 | 2307.125 | 成功 |  ✅ | ✅ | ✅ | |
+| 1 | 31 | IOU | vector | ✅ | ✅ | 0.173 | 0.309 | 25.16 | 成功 | ✅ | ✅ | ✅ |  |
+| 2 | 1 | RotaryMul | vector | ✅ | ✅ | 0.016 | 0.085 | 0.47 | 成功 | ✅ | ❌ | ❌ |  |
+| 2 | 2 | GroupNormSwish | vector | ✅ | ✅ | 0.048 | 0.137 | 0.35 | 成功 | ✅ | ❌ | ❌ | |
+| 2 | 3 | AdvanceStepFlashattn | vector | ✅ | ✅ | 0.0046 | 0.0576 | 0.08 | 成功 | ✅ | ❌ | ❌ |  |
+| 2 | 4 | MoeComputeExpertTokens | vector | ✅ | ✅ | 0.0139 | 0.1178 | 3.93 | 成功 | ✅ | ✅ | ✅ |  |
+| 2 | 5 | MoeInitRouting | vector | ✅ | ✅ | 0.067 | 0.139 | 0.48 | 成功 | ✅ | ❌ | ❌ |  |
+| 2 | 6 | MoeFinalizeRouting | vector | ✅ | ✅ | 0.062 | 0.186 | 0.33 | 成功 | ✅ | ❌ | ❌ |  |
+| 2 | 7 | MoeGatingTopKSoftmax | vector | ✅ | ✅ | 4.817 | 409.060 | 0.04 | 成功 | ✅ | ❌ | ❌ |  |
+| 2 | 8 | QuantScatter | vector | ✅ | ✅ | 0.83 | 1.21 | 0.69 | 成功 | ✅ | ✅ | ❌ |  |
+| 2 | 9 | TopKTopP | vector | ✅ | ✅ | 2.478 | 74.959 | 0.03 | 成功 | ✅ | ❌ | ❌ |  |
+| 2 | 10 | SwigluQuant | vector | ✅ | ✅ | 0.084 | 4.079 | 0.02 | 成功 | ✅ | ❌ | ❌ |  |
+| 2 | 11 | DequantSwigluQuant | vector | ✅ | ✅ | 0.061 | 0.063 | 1.0 | 成功 | ✅ | ✅ | ✅ |  |
+| 2 | 12 | KvRmsnormRopeCache | vector | ✅ | ✅ | 0.086 | 0.008 | 10.81 | 成功 | ✅ | ✅ | ✅ |  |
+| 2 | 13 | InterleaveRope | vector | ✅ | ✅ | 0.00615 | 0.09782 | 0.23 | 成功 | ✅ | ❌ | ❌ |  |
+| 2 | 14 | AdaptiveInstanceNormalization2DBackward | vector | ✅ | ✅ | 0.358 | 0.261 | 1.37 | 成功 | ✅ | ✅ | ✅ |  |
+| 2 | 15 | AttentionSoftmaxWithSoftcappingAndDropout | vector | ✅ | ✅ | 0.182 | 0.36 | 0.50 | 成功 | ✅ | ❌ | ❌ |  |
+| 2 | 16 | Batched2DRopePositionEncodingBackward | vector | ✅ | ✅ | 0.111 | 0.172 | 0.37 | 成功 | ✅ | ❌ | ❌ |  |
+| 2 | 17 | EmbeddingWithInitialLayernormBackward | vector | ✅ | ✅ | 2.281 | 2.802 | 0.81 | 成功 | ✅ | ✅ | ✅ |  |
+| 2 | 18 | FusedAddRmsnorm | vector | ✅ | ✅ | 0.035 | 0.086 | 0.45 | 成功 | ✅ | ❌ | ❌ |  |
+| 2 | 19 | FusedResidualRmsNormBackward | vector | ✅ | ✅ | 0.289 | 0.285 | 1.00 | 成功 | ✅ | ✅ | ✅ |  |
+| 2 | 20 | FusedRopeWithQkNormAndKvCacheUpdate | vector | ✅ | ✅ | 5.773 | 1.188 | 4.86 | 成功 | ✅ | ✅ | ✅ |  |
+| 2 | 21 | GaussianTopkSparseActivation | vector | ✅ | ✅ | 0.183 | 0.010 | 24.58 | 成功 | ✅ | ✅ | ✅ |  |
+| 2 | 22 | HybridAttentionMaskPreparation | vector | ✅ | ✅ | 0.691 | 0.075 | 9.78 | 成功 | ✅ | ✅ | ✅ |  |
+| 2 | 23 | HyenaFftSizePaddingRfft | vector | ✅ | ✅ | 0.809 | 7.262 | 0.11 | 成功 | ✅ | ❌ | ❌ | |
+| 2 | 24 | KvCacheUpdateWithRopeBackward | vector | ✅ | ✅ | 1.449 | 1.501 | 0.97 | 成功 | ✅ | ✅ | ✅ |  |
+| 2 | 25 | MaskedSoftmaxWithAttentionDropoutBackward | vector | ✅ | ✅ | 0.108 | 0.131 | 0.82 | 成功 | ✅ | ✅ | ✅ |  |
+| 2 | 26 | MoeGroupScoreAggregationAndMasking | vector | ✅ | ✅ | 0.207 | 0.144 | 1.52 | 成功 | ✅ | ✅ | ✅ |  |
+| 2 | 27 | MultiMaskAttentionAggregation | vector | ✅ | ✅ | 0.1338 | 0.0329 | 5.22 | 成功 | ✅ | ✅ | ✅ |  |
+| 2 | 28 | MultimodalRopePositionComputationWithGridBasedIndexing | vector | ✅ | ✅ | 1.948 | 2.095 | 0.93 | 成功 | ✅ | ✅ | ✅ | |
+| 2 | 29 | TanhGatedResidualAddBackward | vector | ✅ | ✅ | 0.212 | 0.057 | 2.92 | 成功 | ✅ | ✅ | ✅ |  |
+| 2 | 30 | TimeDecayExponentialStabilization | vector | ✅ | ✅ | 2.2954 | 0.0120 | 654.10 | 成功 | ✅ | ✅ | ✅ |  |
 
 
 ### 结果说明

@@ -18,6 +18,7 @@
       - [**3.1 Triton**](#31-triton)
       - [场景一：单算子生成](#场景一单算子生成)
       - [场景二：Benchmark 批量评测](#场景二benchmark-批量评测)
+      - [场景三：AutoResearch 多轮迭代优化](#场景三autoresearch-多轮迭代优化)
       - [**3.2 AscendC**](#32-ascendc)
       - [场景一：单算子生成 (Lingxi-code Agent)](#场景一单算子生成-lingxi-code-agent)
       - [场景二：Benchmark 批量评测 (Ascend-Benchmark-Evaluator)](#场景二benchmark-批量评测-ascend-benchmark-evaluator)
@@ -33,6 +34,7 @@
 |------|------|------|----------|
 | **Triton** | **AKG-Triton Agent** | 单算子交互式生成 | 任务提取 → 代码生成 → 评测验证（精度对齐与性能测试） |
 | **Triton**  | **Benchmark-Evaluator** | 一键批量评测 | 执行指定 Benchmark 评测，自动总结并生成详细报告 |
+| **Triton**  | **AutoResearch** | 多轮迭代性能优化 | plan → edit → eval → keep/discard 闭环，Claude Code hook 强约束的阶段机 |
 | **AscendC** | **Lingxi_code Agent** | AscendC 单算子交互式生成 | 代码生成 → 评测验证（精度对齐与性能测试） |
 | **AscendC** | **Ascend-Benchmark-Evaluator** | AscendC 算子一键批量评测 | 执行指定 Benchmark 评测，自动总结并生成详细报告 |
 
@@ -210,6 +212,36 @@ arch是 ascend910b2，ASCEND_RT_VISIBLE_DEVICES=1
   - `per_shape_results[].ascend_vs_gpu_ratio`
 
 
+#### 场景三：AutoResearch 多轮迭代优化
+
+适用于已有 ref 和种子 kernel、需要 Claude 长时间迭代优化性能的场景。Claude 写优化 plan → 改 kernel → quick_check + eval → 自动判 KEEP/DISCARD → 进入下一轮，连续失败自动 DIAGNOSE，预算耗尽自动收尾出报告。整套阶段机由 Claude Code hook 强约束。
+
+**操作步骤**：
+
+1. 在 AscendOpGenAgent 目录下配置 AutoResearch 框架：
+```bash
+mkdir -p .claude
+mv setups/autoresearch/CLAUDE.md ./CLAUDE.md
+mv setups/autoresearch/settings.json .claude/settings.json
+mv setups/autoresearch/agents .claude/agents
+mv setups/autoresearch/commands .claude/commands
+```
+
+2. 进入 AscendOpGenAgent 目录，启动 claude：
+```bash
+claude
+```
+
+3. 输入算子优化命令（已有 ref + 种子 kernel，把 `<op>` 换成你的算子名）：
+```text
+/autoresearch --ref workspace/<op>_ref.py --kernel workspace/<op>_kernel.py \
+  --op-name <op> --devices 5 --max-rounds 30
+```
+
+无人值守长跑可用 `/loop /autoresearch --resume` 自动续跑。完整入门、批量跑、断点续跑、阶段机不变量等见 **[docs/AUTORESEARCH.md](docs/AUTORESEARCH.md)**。
+
+---
+
 #### **3.2 AscendC**
 
 #### 场景一：单算子生成 (Lingxi-code Agent)
@@ -323,21 +355,28 @@ AscendOpGenAgent/
 │       ├── {op_name}.pt        # 包含 input_data 和可选 gpu_output
 │       ├── {op_name}.py        # GPU Triton kernel 源码
 │       └── vllm_gpu_perf.csv   # GPU 性能基线数据
-└── skills/                     # Skill 实现目录
-    ├── ascendc_evalution/
-    ├── ascend_benchmark_evaluator/
-    ├── ascendc/
-    ├── benchmark-evaluator/    # 批量评测 Skill
-    ├── dsl_baseline_generation/
-    ├── dsl_lowering/
-    ├── functional_conversion/
-    ├── kernel-designer/
-    ├── kernel-generator/       # 代码生成 Skill
-    ├── kernel-verifier/        # 验证与性能测试 Skill
-    ├── latency-optimizer/
-    ├── op-task-extractor/      # 任务提取 Skill
-    ├── op_desc_generation/
-    └── reference_generation/
+├── skills/                     # Skill 实现目录
+│   ├── ascendc_evalution/
+│   ├── ascend_benchmark_evaluator/
+│   ├── ascendc/
+│   ├── benchmark-evaluator/    # 批量评测 Skill
+│   ├── dsl_baseline_generation/
+│   ├── dsl_lowering/
+│   ├── functional_conversion/
+│   ├── kernel-designer/
+│   ├── kernel-generator/       # 代码生成 Skill
+│   ├── kernel-verifier/        # 验证与性能测试 Skill
+│   ├── latency-optimizer/
+│   ├── op-task-extractor/      # 任务提取 Skill
+│   ├── op_desc_generation/
+│   └── reference_generation/
+├── setups/                     # 场景-specific Claude Code 配置（按需 mv 启用）
+│   └── autoresearch/           # AutoResearch 场景：CLAUDE.md + hooks + 子 agent + slash 命令
+│       ├── CLAUDE.md
+│       ├── settings.json
+│       ├── agents/ar-diagnosis.md
+│       └── commands/autoresearch.md
+└── .autoresearch/              # AutoResearch 框架运行时（脚本 / phase_machine / hooks）
 
 ```
 

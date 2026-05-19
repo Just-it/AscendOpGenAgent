@@ -1,0 +1,13 @@
+# Framework reference tables. Loaded once per process by settings.py.
+
+# Common hallucinated script names → the real script Claude should use.
+# hook_guard_bash flags these early with a targeted error rather than a
+# generic "unknown script" rejection.
+hallucinated_scripts:
+  eval.py: eval_wrapper.py
+  run_eval.py: eval_wrapper.py
+  verify.py: eval_wrapper.py
+  check.py: quick_check.py
+  run.py: eval_wrapper.py
+  test.py: quick_check.py
+  profile.py: eval_wrapper.py

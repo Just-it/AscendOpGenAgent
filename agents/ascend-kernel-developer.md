@@ -524,6 +524,10 @@ while ac_iteration < max_ac_iterations:
 - `performance-analyzer`：performance.py（性能测试脚本）
 - `trace-recorder`：evaluate_tilelang.sh、evaluate_ascendc.sh
 
+**可选参考资料**（不属于上述 skills 列表，不进入任何 Phase 的主流程；仅供 agent 在 Phase 4 ascendc-translator 多轮迭代仍报精度类失败、Conductor 建议持续 stagnant/regressed 时按需自行查阅）：
+- `skills/ascendc/precision-tuning/`：精度调优审计方法论（构造式）+ 知识库 `precision_knowledge_base.json` + 算子分解示例（softmax、layer_norm、matmul 等 8 个，不含 dynamic_quant）。agent 可酌情阅读 SKILL.md 学习取证→审计→修复的思路；本资料不构成强约束，agent 可全部、部分或完全不采纳，是否使用、何时使用、用哪一部分都由 agent 自决。精度判定权威源仍为 `utils/verification_ascendc.py` 的 MERE/MARE。
+- `skills/ascendc/precision-tuning-discovery/`：上述同一资料的发现式审计变体，适用于 agent 对 AscendC API 较熟时的轻流程版本，scripts/references 复用主目录。同样为可选参考。
+
 ---
 
 ## 错误处理

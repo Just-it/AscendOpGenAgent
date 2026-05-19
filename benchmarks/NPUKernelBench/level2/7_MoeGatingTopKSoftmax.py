@@ -23,29 +23,25 @@ class Model(nn.Module):
             # Flatten all but last dimension
             x_flat = x.view(-1, num_experts)  # [B, NUM_EXPERTS]
 
-            # Compute softmax over all experts (NO masking for finished rows)
-            softmax_output = torch.softmax(x_flat, dim=-1)  # [B, NUM_EXPERTS]
+            # Compute softmax in float32 to avoid precision loss / ties
+            softmax_output = torch.softmax(x_flat.float(), dim=-1)  # [B, NUM_EXPERTS]
 
-            # Get top-k experts and their softmax values
-            # NOTE: torch.topk tie-breaking order may differ from NPU when
-            # multiple experts have exactly equal softmax values (common with
-            # float16/bfloat16). The selected values and row_idx remain correct.
+            # Top-k in float32, then convert values back to input dtype
             topk_values, topk_indices = torch.topk(softmax_output, k, dim=-1)  # [B, k]
+            topk_values = topk_values.to(x.dtype)
 
             # For finished rows, set indices to num_experts (sentinel value)
             if finished is not None:
                 finished_flat = finished.view(-1)
                 topk_indices = torch.where(
                     finished_flat.unsqueeze(-1),
-                    torch.tensor(num_experts, device=x.device, dtype=topk_indices.dtype),
+                    torch.full_like(topk_indices, num_experts),
                     topk_indices
                 )
 
-            # Build row_idx: for each output position, the original row index
-            # For 2D [B, E] with k: row_idx[i, j] = i + j * B
-            row_idx = torch.arange(batch_size, device=x.device).unsqueeze(1).repeat(1, k)
-            offset = torch.arange(k, device=x.device).unsqueeze(0).repeat(batch_size, 1) * batch_size
-            row_idx = row_idx + offset
+            # Build row_idx: arange(B*k).reshape([k,B]).transpose(1,0)
+            row_idx = torch.arange(batch_size * k, device=x.device, dtype=torch.int32)
+            row_idx = row_idx.view(k, batch_size).t().contiguous()
 
             # Reshape outputs back to original batch dimensions
             output_shape = original_shape[:-1]
@@ -80,7 +76,6 @@ def get_input_groups():
     json_path = os.path.join(os.path.dirname(__file__), os.path.splitext(os.path.basename(__file__))[0] + '.json')
     input_groups = []
     with open(json_path, 'r') as f:
-        idx = 0
         for line in f:
             line = line.strip()
             if not line:
@@ -104,12 +99,8 @@ def get_input_groups():
                     else:
                         dtype = {'float32': torch.float32, 'float16': torch.float16, 'bfloat16': torch.bfloat16, 'int32': torch.int32, 'int64': torch.int64, 'int8': torch.int8, 'bool': torch.bool}.get(dtype_str, torch.float32)
                         if name == 'x':
-                            if idx % 2 == 0:
-                                mu = float(torch.empty(1).uniform_(-100, 100).item())
-                                sigma = float(torch.empty(1).uniform_(1, 25).item())
-                                tensors[name] = torch.normal(mu, sigma, shape, dtype=dtype) + torch.ones(shape, dtype=dtype)
-                            else:
-                                tensors[name] = torch.empty(shape, dtype=dtype).uniform_(-5, 5) + torch.ones(shape, dtype=dtype)
+                            sigma = {'float32': 0.5, 'float16': 0.5, 'bfloat16': 0.7}.get(dtype_str, 0.5)
+                            tensors[name] = ((torch.randn(shape) * sigma).exp() - 2.0).clamp(max=torch.finfo(dtype).max).to(dtype)
                         else:
                             tensors[name] = torch.randn(shape, dtype=dtype)
                 elif inp['type'] == 'attr':
@@ -120,7 +111,6 @@ def get_input_groups():
             for inp in inputs:
                 group.append(tensors[inp['name']])
             input_groups.append(group)
-            idx += 1
     return input_groups
 
 

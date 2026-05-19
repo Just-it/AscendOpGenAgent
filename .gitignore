@@ -1,14 +1,27 @@
+# --- legacy AscendOpGenAgent workflows (utils/, skills/triton, skills/ascendc) ---
 node_modules
 package.json
 bun.lock
 benchmark_results/*
 benchmark_eval*
 kernel_meta/*
-__pycache__
 triton_ascend_output
 framework_profile*
-.claude
 output*
 build/
 extra-info/
 *.tar
+
+# --- python ---
+__pycache__/
+*.pyc
+*.egg-info/
+
+# --- AutoResearch (claude-autoresearch framework) runtime state ---
+ar_tasks/
+.ar_state/.heartbeat
+.ar_state/.edit_started
+.autoresearch/.active_task
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+workspace/

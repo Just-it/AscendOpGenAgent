@@ -28,7 +28,6 @@ argument-hint: >
 .
 ├── {output_dir}/         # 当前活跃任务目录
 │   ├── model.py          # 参考 PyTorch 模型
-│   ├── model.json        # 测试用例文件（JSON Lines），model.py 按 __file__ 查找
 │   ├── <op_name>.json    # 原始测试用例文件（备份保留）
 │   ├── <op_name>.json.bak# 原始 .json 备份
 │   ├── model_new_tilelang.py # TileLang 优化实现（仅复杂算子路径）
@@ -39,7 +38,7 @@ argument-hint: >
 
 ## Skill 参考资料
 本 skill 提供以下参考资料（位于 `@references/` 目录）：
-- `@references/performance.py` — 性能测试脚本，支持对比多种实现
+- `@script/performance.py` — 性能测试脚本，支持对比多种实现
 
 ## 流程
 
@@ -50,9 +49,9 @@ argument-hint: >
    - `model_new_tilelang.py` — TileLang 实现（可选，且仅在用户明确要求时测试）
 
 2. **执行性能测试**
-   调用 `@references/performance.py` 脚本进行性能测试。默认对比 `reference` 和 `ascendc`；只有在用户明确要求时才额外纳入 `tilelang`：
+   调用 `@script/performance.py` 脚本进行性能测试。默认对比 `reference` 和 `ascendc`；只有在用户明确要求时才额外纳入 `tilelang`：
    ```bash
-   python3 @references/performance.py --output_dir {output_dir} --output {output_dir}
+   python3 @script/performance.py --output_dir {output_dir} --output {output_dir}
    ```
    默认必须测试：reference（baseline）、ascendc
 

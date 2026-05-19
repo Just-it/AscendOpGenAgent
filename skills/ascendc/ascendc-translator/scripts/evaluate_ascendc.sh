@@ -34,7 +34,7 @@ BUILD_TYPE="${BUILD_TYPE:-Release}"
 
 usage() {
   cat <<'EOF'
-Usage: bash <path-to-ascendc-translator>/references/evaluate_ascendc.sh [task]
+Usage: bash <path-to-ascendc-translator>/scripts/evaluate_ascendc.sh [task]
 
 Arguments:
   task    Task directory to verify. Defaults to current_task.
@@ -46,9 +46,9 @@ Environment overrides:
   BUILD_TYPE                 CMake build type (default: Release)
 
 Examples:
-  bash <path-to-ascendc-translator>/references/evaluate_ascendc.sh
-  bash <path-to-ascendc-translator>/references/evaluate_ascendc.sh current_task
-  ASCENDC_SOC_VERSION=Ascend910B3 bash <path-to-ascendc-translator>/references/evaluate_ascendc.sh current_task
+  bash <path-to-ascendc-translator>/scripts/evaluate_ascendc.sh
+  bash <path-to-ascendc-translator>/scripts/evaluate_ascendc.sh current_task
+  ASCENDC_SOC_VERSION=Ascend910B3 bash <path-to-ascendc-translator>/scripts/evaluate_ascendc.sh current_task
 EOF
 }
 

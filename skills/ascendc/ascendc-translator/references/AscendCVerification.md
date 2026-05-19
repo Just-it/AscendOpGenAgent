@@ -3,7 +3,7 @@
 统一验证入口：
 
 ```bash
-bash skills/ascendc-translator/references/evaluate_ascendc.sh <task>
+bash skills/ascendc-translator/scripts/evaluate_ascendc.sh <task>
 ```
 
 该脚本会先调用统一构建器 `.claude/skills/ascendc-translator/scripts/build_ascendc.py` 编译 `<task>/kernel/`，再调用 `.claude/skills/ascendc-translator/scripts/verification_ascendc.py` 做 reference/candidate 对拍，不再依赖任务目录内的 `run.sh`。

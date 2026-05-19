@@ -38,7 +38,6 @@ argument-hint: >
 .
 ├── {output_dir}/         # 当前活跃任务目录
 │   ├── model.py          # 参考 PyTorch 模型，禁止修改
-│   ├── model.json        # 测试用例文件（JSON Lines），model.py 按 __file__ 查找
 │   ├── <op_name>.json    # 原始测试用例文件（备份保留）
 │   ├── <op_name>.json.bak# 原始 .json 备份
 │   ├── design/           # TileLang DSL 用于表达 kernel 设计
@@ -54,7 +53,7 @@ argument-hint: >
 - `@references/BlockLevelDesign.md` — Block 层级设计指南
 - `@references/TileLangAscendProgrammingGuide.md` — TileLang Ascend 编程指南
 - `@references/TileLangDebug.md` — TileLang 调试指南（仅在需要排查 DSL 表达问题时参考）
-- `@references/evaluate_tilelang.sh` — TileLang 评测脚本（当前仅供可选调试，不作为流程 gate）
+- `@script/evaluate_tilelang.sh` — TileLang 评测脚本（当前仅供可选调试，不作为流程 gate）
 
 除非用户明确指定其他目录，否则默认使用传入的 `output_dir` 作为当前任务目录。
 其他任务目录可以作为参考实现。
@@ -69,5 +68,5 @@ argument-hint: >
    在第一步基础上继续生成 `{output_dir}/design/tile_level/`。直接以 block-level 设计为骨架，在 tile-level 中补全各处 `TODO(tile-level)`，完成用于表达设计意图的 TileLang 设计与实现。
    参考文档：`@references/TileLangAscendProgrammingGuide.md`
 3. `TileLang 自检（可选）`
-   如用户明确要求，或为了排查 DSL 语法 / 编译问题，可调用 `@references/evaluate_tilelang.sh {output_dir}` 做辅助检查；但 TileLang 结果当前不作为 correctness gate，也不作为性能测试输入。若遇到框架语义缺陷、尾块处理异常或其他 TileLang 自身 bug，应保留设计表达并在最终说明中明确记录，不要为了通过 TileLang 验证而扭曲设计。
+   如用户明确要求，或为了排查 DSL 语法 / 编译问题，可调用 `@script/evaluate_tilelang.sh {output_dir}` 做辅助检查；但 TileLang 结果当前不作为 correctness gate，也不作为性能测试输入。若遇到框架语义缺陷、尾块处理异常或其他 TileLang 自身 bug，应保留设计表达并在最终说明中明确记录，不要为了通过 TileLang 验证而扭曲设计。
    参考文档：`@references/TileLangDebug.md`

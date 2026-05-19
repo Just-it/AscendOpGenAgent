@@ -17,7 +17,6 @@ skills:
   - ascendc-translator
   - ascendc-code-gen
   - ascendc-operator-project-init
-  - testcase-gen
   - performance-analyzer
   - trace-recorder
 
@@ -73,7 +72,7 @@ Phase 7: Trace 记录            (trace-recorder)
 | 构建脚本 | `.claude/skills/ascendc-translator/scripts/build_ascendc.py` | AscendC kernel 编译 |
 | 验证脚本 | `.claude/skills/ascendc-translator/scripts/verification_ascendc.py` | AscendC 正确性验证 |
 | 验证脚本 | `.claude/skills/tilelang-designer/scripts/verification_tilelang.py` | TileLang 正确性验证 |
-| 性能测试 | `.claude/skills/performance-analyzer/references/performance.py` | 性能对比测试 |
+| 性能测试 | `.claude/skills/performance-analyzer/script/performance.py` | 性能对比测试 |
 | 批处理 | `batch_run_performance.sh` | 批量性能测试 |
 
 ### Hook 行为
@@ -95,8 +94,8 @@ Phase 7: Trace 记录            (trace-recorder)
 
 | 阶段 | 脚本路径 | 说明 |
 |------|---------|------|
-| Phase 3 | `skills/ascendc/tilelang-designer/scripts/validate_tilelang_impl.py` | TileLang 实现退化检测 |
-| Phase 4 | `skills/ascendc/ascendc-translator/scripts/validate_ascendc_impl.py` | AscendC 实现退化检测 |
+| Phase 3 | `.claude/skills/tilelang-designer/scripts/validate_tilelang_impl.py` | TileLang 实现退化检测 |
+| Phase 4 | `.claude/skills/ascendc-translator/scripts/validate_ascendc_impl.py` | AscendC 实现退化检测 |
 
 ---
 
@@ -164,16 +163,10 @@ Phase 7: Trace 记录            (trace-recorder)
 │       ├── torch_kernel_helper.h   # EXEC_KERNEL_CMD 宏
 │       └── torch_aclnn_helper.h    # EXEC_NPU_CMD 宏
 │
-├── test/                        # 测试目录
-│   ├── <op_name>-test-cases.md  # 统一测试用例文档
-│   └── test_<op_name>.py        # 功能测试
-│
 ├── model_new_tilelang.py        # TileLang 实现 (仅复杂算子路径)
 ├── model_new_ascendc.py         # AscendC wrapper → 内部调用 torch.ops.npu.<op>()
 ├── trace.md                     # 执行 trace 记录
-├── performance.json             # 性能汇总
-├── .validate_tilelang_result.json
-└── .validate_ascendc_result.json
+└── performance.json             # 性能汇总
 ```
 
 **Skill 参考资料**（各 skill 独立维护，位于 `.claude/skills/<skill-name>/`）：
@@ -182,9 +175,7 @@ Phase 7: Trace 记录            (trace-recorder)
 - `ascendc-translator`：dsl2Ascendc.md、TileLang-AscendC-API-Mapping.md、AscendC_knowledge/、AscendCVerification.md、evaluate_ascendc.sh
 - `ascendc-code-gen`：elementwise_op_host.cpp、elementwise_op_kernel.cpp、row_op_host.cpp、row_op_kernel.cpp 等模板、GUIDE.md、data-copy-api.md、vector-compute-api.md、sync-control-api.md、resource-management-api.md、basic-data-structures-api.md、kernel-constraints.md
 - `ascendc-operator-project-init`：templates/ascend-kernel/（完整项目模板）、scripts/detect_ascend_kernel_project.sh
-- `testcase-gen`：test-cases-template.md
 - `performance-analyzer`：performance.py
-- `trace-recorder`：evaluate_tilelang.sh、evaluate_ascendc.sh
 
 ---
 
@@ -197,7 +188,7 @@ Phase 7: Trace 记录            (trace-recorder)
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `npu` | NPU 设备 ID | 0 |
-| `op_file` | 算子描述文件路径（算子的 model.py） | 必填 |
+| `op_file` | 算子描述文件路径（算子的 model.py或<op_name>.py） | 必填 |
 | `output_dir` | 结果输出目录路径 | 必填 |
 
 **输入格式示例**：
@@ -212,7 +203,7 @@ Phase 7: Trace 记录            (trace-recorder)
 
 ### 算子分类
 
-读取 `op_file` (model.py)，分析 forward() 中的计算逻辑，根据「算子分类路由规则」判定算子类型：
+读取 `op_file` (model.py或<op_name>.py)，分析 forward() 中的计算逻辑，根据「算子分类路由规则」判定算子类型：
 
 - 记录 `op_type = "simple"` 或 `op_type = "complex"`
 - 简单算子后续走 design.md → ascendc-code-gen 路径
@@ -225,7 +216,7 @@ Phase 7: Trace 记录            (trace-recorder)
 ### 1.1 复制算子文件
 
 1. 创建 `{output_dir}/` 目录（如不存在）
-2. 复制 `{op_file}` 到 `{output_dir}/model.py`
+2. 复制 `{op_file}` 到 `{output_dir}/model.py`。复制后检查 model.py 中 `get_input_groups()` 的 `json_path` 解析逻辑：如果使用了 `os.path.splitext(os.path.basename(__file__))[0] + '.json'` 这种基于 `__file__` 动态推导文件名的方式（文件重命名为 model.py 后会导致路径指向不存在的 model.json），则将该行改为直接引用原算子同名的 JSON 文件名（即 `op_file` 去掉 .py 后缀后加 .json，例如 `op_file` 为 `8_QuantScatter.py` 则改为 `"8_QuantScatter.json"`）。如果是其他写法（已硬编码文件名或使用绝对路径），则不修改。
 3. 查找 `{op_file}` 同级目录下与算子同名的 `.json` 文件，若存在则复制到 `{output_dir}/`
 4. 后续所有操作都在 `{output_dir}/` 目录下进行
 
@@ -238,8 +229,8 @@ mkdir -p {output_dir}/kernel/op_host
 mkdir -p {output_dir}/kernel/op_kernel
 mkdir -p {output_dir}/kernel/utils
 # 从模板复制固定工具文件（不生成，内容固定）
-cp skills/ascendc/ascendc-operator-project-init/templates/ascend-kernel/csrc/utils/torch_kernel_helper.h {output_dir}/kernel/utils/
-cp skills/ascendc/ascendc-operator-project-init/templates/ascend-kernel/csrc/utils/torch_aclnn_helper.h {output_dir}/kernel/utils/
+cp .claude/skills/ascendc-operator-project-init/templates/ascend-kernel/csrc/utils/torch_kernel_helper.h {output_dir}/kernel/utils/
+cp .claude/skills/ascendc-operator-project-init/templates/ascend-kernel/csrc/utils/torch_aclnn_helper.h {output_dir}/kernel/utils/
 ```
 
 kernel 目录结构（后续 Phase 4 由 code-gen / translator skill 填充）：
@@ -331,7 +322,11 @@ return torch.ops.npu.<op_name>(x, kernel_size, eps)
 
 ## Phase 2: 测试用例精简
 
-调用 `case-simplifier` skill，读取 `{output_dir}` 中与算子对应的 `.json` 文件（JSON Lines 格式，每行一个 `{"inputs": [...]}` 对象），对其中的输入 cases 进行精简，使 case 数量尽量不超过 10 个，同时保证覆盖度。
+**确定目标 JSON 文件**：
+1. 读取 `{output_dir}/model.py` 中 `get_input_groups()` 函数，从 `json_path` 赋值语句提取引用的 `.json` 文件名（如 `"8_QuantScatter.json"`），此文件即为目标 JSON
+2. Phase 1.1 已将动态路径（`os.path.splitext(os.path.basename(__file__))[0]`）修正为固定的算子 JSON 文件名，因此 `get_input_groups()` 指向的一定是 `{output_dir}` 内实际存在的 JSON 文件
+
+调用 `case-simplifier` skill，读取目标 `.json` 文件（JSON Lines 格式，每行一个 `{"inputs": [...]}` 对象），对其中的输入 cases 进行精简，使 case 数量尽量不超过 10 个，同时保证覆盖度。
 
 **前置操作**：
 - 先将目标 `.json` 文件备份为同名 `.json.bak`（保留全量用例原件）
@@ -417,7 +412,7 @@ while tl_iteration < max_tl_iterations:
     ── 3.2 AST 退化预检查 ────────────────────────────
     执行 validate_tilelang_impl.py 检测 PyTorch 退化
 
-    python skills/ascendc/tilelang-designer/scripts/validate_tilelang_impl.py \
+    python .claude/skills/tilelang-designer/scripts/validate_tilelang_impl.py \
         {output_dir}/model_new_tilelang.py
 
     退化 (exit code != 0):
@@ -430,7 +425,7 @@ while tl_iteration < max_tl_iterations:
     ── 3.3 功能验证 ──────────────────────────────────
     调用 tilelang-designer skill 自带的 evaluate_tilelang.sh
 
-    bash skills/ascendc/tilelang-designer/references/evaluate_tilelang.sh \
+    bash .claude/skills/tilelang-designer/script/evaluate_tilelang.sh \
         {output_dir}
 
     验证通过:
@@ -540,7 +535,7 @@ while ac_iteration < max_ac_iterations:
     ── 4.2 AST 退化预检查 ────────────────────────────
     执行 validate_ascendc_impl.py 检测 PyTorch 退化
 
-    python skills/ascendc/ascendc-translator/scripts/validate_ascendc_impl.py \
+    python .claude/skills/ascendc-translator/scripts/validate_ascendc_impl.py \
         {output_dir}/model_new_ascendc.py
 
     退化 (exit code != 0):
@@ -553,7 +548,7 @@ while ac_iteration < max_ac_iterations:
     ── 4.3 功能验证 ──────────────────────────────────
     调用 ascendc-translator skill 自带的 evaluate_ascendc.sh
 
-    bash skills/ascendc/ascendc-translator/references/evaluate_ascendc.sh \
+    bash .claude/skills/ascendc-translator/scripts/evaluate_ascendc.sh \
         {output_dir}
 
     验证通过:
@@ -622,7 +617,7 @@ except ImportError:
 
 **流程**：
 1. **调用 performance-analyzer skill**：传入 `output_dir` 目录路径
-2. **执行性能测试**：默认测试 `reference` 和 `ascendc`，使用 `@references/performance.py` 进行对比测试；只有用户明确要求时才额外纳入 `tilelang`
+2. **执行性能测试**：默认测试 `reference` 和 `ascendc`，使用 `@script/performance.py` 进行对比测试；只有用户明确要求时才额外纳入 `tilelang`
 3. **获取性能报告**：记录各实现的耗时和加速比
 
 **产出**：性能分析报告，`performance.json`，记录每个 case 的加速比

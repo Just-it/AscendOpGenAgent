@@ -32,7 +32,6 @@ argument-hint: >
 .
 ├── {output_dir}/         # 当前活跃任务目录
 │   ├── model.py          # 参考 PyTorch 模型，禁止修改
-│   ├── model.json        # 测试用例文件（JSON Lines），model.py 按 __file__ 查找
 │   ├── <op_name>.json    # 原始测试用例文件（备份保留）
 │   ├── <op_name>.json.bak# 原始 .json 备份
 │   ├── design/           # TileLang DSL 用于表达 kernel 设计
@@ -65,7 +64,7 @@ argument-hint: >
 - `@references/TileLang-AscendC-API-Mapping.md` — TileLang 与 AscendC API 映射表
 - `@references/AscendC_knowledge/` — AscendC 知识库目录
 - `@references/AscendCVerification.md` — AscendC 验证指南
-- `@references/evaluate_ascendc.sh` — AscendC 评测脚本
+- `@scripts/evaluate_ascendc.sh` — AscendC 评测脚本
 
 除非用户明确指定其他目录，否则默认使用传入的 `output_dir` 作为当前任务目录。
 其他任务目录可以作为参考实现。
@@ -153,5 +152,5 @@ argument-hint: >
    ```
 
    **禁止**在 model_new_ascendc.py 中使用 `torch.*` / `F.*` 计算算子。
-   然后调用 `@references/evaluate_ascendc.sh {output_dir}` 编译并验证（内部 cmake + make + whl 安装）；如果结果不正确，继续迭代修改直到通过验证。迭代次数上限为 3 次，若 3 次迭代后仍未通过验证，停止迭代并报告当前状态。若 TileLang 表达与真实执行语义存在偏差，应以设计意图和参考实现为准完成 AscendC 落地。
+   然后调用 `@scripts/evaluate_ascendc.sh {output_dir}` 编译并验证（内部 cmake + make + whl 安装）；如果结果不正确，继续迭代修改直到通过验证。迭代次数上限为 3 次，若 3 次迭代后仍未通过验证，停止迭代并报告当前状态。若 TileLang 表达与真实执行语义存在偏差，应以设计意图和参考实现为准完成 AscendC 落地。
    参考文档：`@references/AscendCVerification.md`

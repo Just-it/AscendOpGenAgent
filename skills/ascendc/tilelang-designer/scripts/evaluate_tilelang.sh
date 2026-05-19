@@ -39,7 +39,7 @@ ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-3}"
 
 usage() {
   cat <<'EOF'
-Usage: bash skills/ascendc/tilelang-designer/references/evaluate_tilelang.sh [task]
+Usage: bash skills/ascendc/tilelang-designer/script/evaluate_tilelang.sh [task]
 
 Arguments:
   task    Task directory to verify. Defaults to current_task.
@@ -55,12 +55,12 @@ Environment overrides:
   ASCEND_RT_VISIBLE_DEVICES  Device id used inside the container
 
 Examples:
-  bash <path-to-tilelang-designer>/references/evaluate_tilelang.sh
-  bash <path-to-tilelang-designer>/references/evaluate_tilelang.sh matmul_add
-  SSH_TARGET=ascend-box bash <path-to-tilelang-designer>/references/evaluate_tilelang.sh matmul_add
-  REMOTE_EVAL_WORKDIR=workdir_remote_eval_wzz bash <path-to-tilelang-designer>/references/evaluate_tilelang.sh current_task
-  REMOTE_BASE_DIR=/data/eval bash <path-to-tilelang-designer>/references/evaluate_tilelang.sh current_task
-  ASCEND_RT_VISIBLE_DEVICES=3 bash <path-to-tilelang-designer>/references/evaluate_tilelang.sh current_task
+  bash <path-to-tilelang-designer>/script/evaluate_tilelang.sh
+  bash <path-to-tilelang-designer>/script/evaluate_tilelang.sh matmul_add
+  SSH_TARGET=ascend-box bash <path-to-tilelang-designer>/script/evaluate_tilelang.sh matmul_add
+  REMOTE_EVAL_WORKDIR=workdir_remote_eval_wzz bash <path-to-tilelang-designer>/script/evaluate_tilelang.sh current_task
+  REMOTE_BASE_DIR=/data/eval bash <path-to-tilelang-designer>/script/evaluate_tilelang.sh current_task
+  ASCEND_RT_VISIBLE_DEVICES=3 bash <path-to-tilelang-designer>/script/evaluate_tilelang.sh current_task
 EOF
 }
 

@@ -60,7 +60,7 @@ for dir in "$BASE_DIR"/*; do
             export ASCEND_RT_VISIBLE_DEVICES=$device_id
             
             # 执行任务
-            python3 /home/y00889327/AscendOpGenAgent/.claude/skills/performance-analyzer/references/performance.py --output_dir "$dir" --output "$dir" 2>&1 | \
+            python3 /home/y00889327/AscendOpGenAgent/.claude/skills/performance-analyzer/script/performance.py --output_dir "$dir" --output "$dir" 2>&1 | \
             grep -v "tiling struct \[MC2MatmulV3TilingData\] is conflict" | \
             grep -v "tiling struct \[TileInfo\] is conflict" \
             >> "$LOG_FILE"

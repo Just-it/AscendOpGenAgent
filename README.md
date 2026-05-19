@@ -220,10 +220,7 @@ arch是 ascend910b2，ASCEND_RT_VISIBLE_DEVICES=1
 
 1. 在 AscendOpGenAgent 目录下配置 Agent 和 skills：
 ```bash
-mkdir -p .claude
-mkdir -p .claude/skills
-mv agents/ascend-kernel-developer.md .claude/CLAUDE.md
-mv skills/ascendc/* .claude/skills/
+bash init.sh
 ```
 
 2. 进入 AscendOpGenAgent 目录，启动 claude：
@@ -246,12 +243,9 @@ claude
 
 **操作步骤**：
 
-1. 在 AscendOpGenAgent 目录下创建 `.claude` 目录并配置 Agent：
+1. 在 AscendOpGenAgent 目录下配置 Agent 和 skills：
 ```bash
-mkdir -p .claude
-mkdir -p .claude/skills
-mv agents/ascend-kernel-developer.md .claude/CLAUDE.md
-mv skills/ascendc/* .claude/skills/
+bash init.sh
 ```
 
 2. 进入 AscendOpGenAgent 目录，执行批量调度脚本：

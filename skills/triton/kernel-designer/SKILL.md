@@ -84,6 +84,7 @@ argument-hint: >
 | | `@references/cases/reduction-sum-fused.md` | elemwise + sum 融合 |
 | | `@references/cases/reduction-sum-large.md` | 大规模 sum：重组 |
 | | `@references/cases/reduction-weighted-swiglu.md` | 3D SwiGLU backward：reshape + 行二次切分 |
+| **Sort/Select** | `@references/cases/sort-bitonic-topk-topp.md` | bitonic sort + 排序后 cumsum + scatter back |
 
 ### 按需加载的知识
 
@@ -97,7 +98,7 @@ argument-hint: >
 
 1. 仔细阅读 `task_desc` 中 `Model.forward()` 的参考实现
 2. 理解算子的数学逻辑和计算模式
-3. 判断算子类型（elementwise / reduce / matmul / attention / 复合）
+3. 判断算子类型（elementwise / reduce / matmul / attention / sort-dependent / 复合）
 4. 根据目标硬件架构，选择合适的并行化策略和内存访问模式
 5. 使用 UnifiedSketch DSL 设计算法草图
 
@@ -116,6 +117,7 @@ argument-hint: >
 - 考虑**目标硬件架构**的优化机会（并行度、内存访问模式、数据对齐）
 - 标注**优化点和权衡决策**（使用 `@llm_hint` 注解）
 - 数值正确性优先，性能次之
+- **Sort-dependent 强制排序**：若参考实现含 `torch.sort(..., stable=True)`、`torch.argsort(..., stable=True)`、或存在"排序后 cumsum / 排序后 scatter back"组合，sketch **必须**包含显式排序步骤（如 bitonic sort），**禁止**用 "binary search + eps" 等近似方案代替
 
 ## 草图特点
 
@@ -129,7 +131,7 @@ argument-hint: >
 
 **重要**：思考过程中请只做框架级别的分析和决策，例如：
 
-- 算子类型判断（elementwise / reduce / matmul 等）
+- 算子类型判断（elementwise / reduce / matmul / sort-dependent 等）
 - 选择什么并行策略（core 级并行、数据切分方式）
 - Tile 大小选择（考虑 NPU UB 容量和对齐要求）
 - 数据类型如何处理

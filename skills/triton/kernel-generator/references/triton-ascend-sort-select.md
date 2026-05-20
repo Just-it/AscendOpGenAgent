@@ -159,3 +159,243 @@ tl.store(scores_ptr + j, -1.0, mask=suppress)
 # 错误：先收集所有保留元素再截断（破坏降序）
 # 正确：每次迭代只选一个，天然满足降序和数量限制
 ```
+
+```python
+# 错误：用 binary search 找 top-k 阈值 + dynamic eps tie-breaking
+# 原因：低精度 dtype 下 eps 无法覆盖所有 tied 边界，stable sort 语义无法复现
+# 正确：参考实现含 stable=True 时必须显式排序（如 bitonic sort）
+```
+
+---
+
+## 3. Bitonic Sort + 排序后处理范式
+
+### 3.1 范式适用判定
+
+| 模式 | 适用场景 | 不适用场景 |
+|------|---------|-----------|
+| **selection-sort**（第1节） | 只要 TopK 的索引/值集合，不关心排序后顺序 | 需要排序后顺序做 cumsum / mask / scatter |
+| **bitonic-sort**（本节） | 需要**排序后的完整数组**用于后续 cumsum / scatter back | 纯 TopK 取前 K 个即可 |
+
+**强制使用 bitonic-sort 的信号**：
+- 参考实现含 `torch.sort(..., stable=True)` 且后续有 `cumsum`、`masked_fill`、`scatter_`
+- 算子名含 `topk` + `topp` 组合
+- 需要按排序后顺序做前缀和再映射回原始索引
+
+### 3.2 Bitonic Sort 核心模板
+
+```python
+@triton.jit
+def bitonic_sort_kernel(
+    vals_ptr, idxs_ptr,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """
+    Tile-based bitonic sort for Triton Ascend.
+    同时维护值和原始索引，支持 stable sort tie-breaking.
+    """
+    NEG_INF_VAL = -10000.0
+    pid = tl.program_id(0)
+
+    # 加载数据到 temp buffer（padding 用 NEG_INF_VAL）
+    for v_start in range(0, n_elements, BLOCK_SIZE):
+        v_offsets = v_start + tl.arange(0, BLOCK_SIZE)
+        vmask = v_offsets < n_elements
+        vals = tl.load(vals_ptr + v_offsets, mask=vmask, other=NEG_INF_VAL)
+        idxs = v_offsets
+        tl.store(vals_ptr + v_offsets, tl.where(vmask, vals, NEG_INF_VAL))
+        tl.store(idxs_ptr + v_offsets, idxs)
+
+    # Bitonic sort: 16 outer * 16 inner = log2(65536)^2
+    stride = 2
+    for outer_iter in range(0, 16):
+        do_sort = stride <= n_elements
+        dist = stride // 2
+
+        for inner_iter in range(0, 16):
+            do_inner = dist >= 1
+            tile_dist = dist // BLOCK_SIZE
+
+            if dist < BLOCK_SIZE:
+                # Same-tile: partner = i ^ dist
+                for v_start in range(0, n_elements, BLOCK_SIZE):
+                    tile_offsets = v_start + tl.arange(0, BLOCK_SIZE)
+                    vmask_tile = tile_offsets < n_elements
+
+                    tile_vals = tl.load(vals_ptr + tile_offsets, mask=vmask_tile, other=NEG_INF_VAL)
+                    tile_idxs = tl.load(idxs_ptr + tile_offsets, mask=vmask_tile, other=0)
+
+                    i = tl.arange(0, BLOCK_SIZE)
+                    partner = i ^ dist
+                    partner_offsets = v_start + partner
+                    partner_mask = partner_offsets < n_elements
+
+                    partner_vals = tl.load(vals_ptr + partner_offsets, mask=partner_mask, other=NEG_INF_VAL)
+                    partner_idxs = tl.load(idxs_ptr + partner_offsets, mask=partner_mask, other=0)
+
+                    j = tile_offsets
+                    direction_asc = (j & stride) == 0
+                    is_smaller = j < partner_offsets
+
+                    # Tie-breaking: equal 时原始索引小者优先
+                    is_less = tile_vals < partner_vals
+                    is_equal = tile_vals == partner_vals
+                    use_tile = is_less | (is_equal & (tile_idxs < partner_idxs))
+
+                    min_val = tl.where(use_tile, tile_vals, partner_vals)
+                    max_val = tl.where(use_tile, partner_vals, tile_vals)
+                    min_idx = tl.where(use_tile, tile_idxs, partner_idxs)
+                    max_idx = tl.where(use_tile, partner_idxs, tile_idxs)
+
+                    final_val = tl.where(
+                        is_smaller,
+                        tl.where(direction_asc, min_val, max_val),
+                        tl.where(direction_asc, max_val, min_val)
+                    )
+                    final_idx = tl.where(
+                        is_smaller,
+                        tl.where(direction_asc, min_idx, max_idx),
+                        tl.where(direction_asc, max_idx, min_idx)
+                    )
+
+                    do_swap = do_inner & do_sort
+                    tl.store(vals_ptr + tile_offsets, tl.where(do_swap, final_val, tile_vals), mask=vmask_tile)
+                    tl.store(idxs_ptr + tile_offsets, tl.where(do_swap, final_idx, tile_idxs), mask=vmask_tile)
+            else:
+                # Cross-tile: partner_t = t ^ tile_dist
+                for v_start in range(0, n_elements, BLOCK_SIZE):
+                    t = v_start // BLOCK_SIZE
+                    partner_t = t ^ tile_dist
+
+                    tile_start = v_start
+                    partner_start = partner_t * BLOCK_SIZE
+
+                    tile_offsets = tile_start + tl.arange(0, BLOCK_SIZE)
+                    partner_offsets = partner_start + tl.arange(0, BLOCK_SIZE)
+                    vmask_tile = tile_offsets < n_elements
+                    vmask_partner = partner_offsets < n_elements
+
+                    tile_vals = tl.load(vals_ptr + tile_offsets, mask=vmask_tile, other=NEG_INF_VAL)
+                    tile_idxs = tl.load(idxs_ptr + tile_offsets, mask=vmask_tile, other=0)
+                    partner_vals = tl.load(vals_ptr + partner_offsets, mask=vmask_partner, other=NEG_INF_VAL)
+                    partner_idxs = tl.load(idxs_ptr + partner_offsets, mask=vmask_partner, other=0)
+
+                    j = tile_offsets
+                    partner_j = partner_offsets
+                    direction_asc = (j & stride) == 0
+                    is_smaller = j < partner_j
+
+                    is_less = tile_vals < partner_vals
+                    is_equal = tile_vals == partner_vals
+                    use_tile = is_less | (is_equal & (tile_idxs < partner_idxs))
+
+                    min_val = tl.where(use_tile, tile_vals, partner_vals)
+                    max_val = tl.where(use_tile, partner_vals, tile_vals)
+                    min_idx = tl.where(use_tile, tile_idxs, partner_idxs)
+                    max_idx = tl.where(use_tile, partner_idxs, tile_idxs)
+
+                    final_val = tl.where(
+                        is_smaller,
+                        tl.where(direction_asc, min_val, max_val),
+                        tl.where(direction_asc, max_val, min_val)
+                    )
+                    final_partner_val = tl.where(
+                        ~is_smaller,
+                        tl.where(direction_asc, min_val, max_val),
+                        tl.where(direction_asc, max_val, min_val)
+                    )
+                    final_idx = tl.where(
+                        is_smaller,
+                        tl.where(direction_asc, min_idx, max_idx),
+                        tl.where(direction_asc, max_idx, min_idx)
+                    )
+                    final_partner_idx = tl.where(
+                        ~is_smaller,
+                        tl.where(direction_asc, min_idx, max_idx),
+                        tl.where(direction_asc, max_idx, min_idx)
+                    )
+
+                    do_swap = do_inner & do_sort
+                    tl.store(vals_ptr + tile_offsets, tl.where(do_swap, final_val, tile_vals), mask=vmask_tile)
+                    tl.store(idxs_ptr + tile_offsets, tl.where(do_swap, final_idx, tile_idxs), mask=vmask_tile)
+
+                    store_partner_mask = vmask_partner & (partner_t != t)
+                    tl.store(vals_ptr + partner_offsets, tl.where(do_swap, final_partner_val, partner_vals), mask=store_partner_mask)
+                    tl.store(idxs_ptr + partner_offsets, tl.where(do_swap, final_partner_idx, partner_idxs), mask=store_partner_mask)
+
+            dist = dist // 2
+        stride = stride * 2
+```
+
+**关键点**：
+- `BLOCK_SIZE=256`，`sort_size` 向上取整到 2 的幂
+- 同时维护 `temp_vals` 和 `temp_idxs` 两个 buffer
+- `use_tile = is_less | (is_equal & (tile_idxs < partner_idxs))` —— stable sort 的 tie-breaking 核心
+- same-tile（`dist < BLOCK_SIZE`，`partner = i ^ dist`）vs cross-tile（`partner_t = t ^ tile_dist`）
+- Triton Ascend 不能 `break`，循环次数必须固定（16×16 覆盖到 65536）
+
+### 3.3 排序后处理三件套（TopK + TopP 范式）
+
+排序完成后，按排序后顺序执行：
+
+```python
+# Step 1: 直接取 kth_value（零误差）
+kth_idx = sort_size - k_int
+kth_value = sorted_vals[kth_idx]  # 通过 tl.load + mask 实现
+
+# Step 2: Two-pass softmax（跨 tile 全局 max + sum_exp）
+#   Pass 1: 遍历所有 tile 找 global_max（排除被 top-k mask 的元素）
+#   Pass 2: 遍历所有 tile 累加 exp(sorted_val - global_max)
+
+# Step 3: Cumsum with offset（跨 tile 全局前缀和）
+cumsum_offset = 0.0
+for v_start in range(0, sort_size, BLOCK_SIZE):
+    tile_vals = tl.load(sorted_vals_ptr + v_offsets)
+    softmax_vals = exp(tile_vals - global_max) / sum_exp
+    cumsum_vals = tl.cumsum(softmax_vals, axis=0) + cumsum_offset
+    cumsum_offset += tl.sum(softmax_vals)
+
+# Step 4: Top-p mask（零误差，无需 eps）
+threshold_p = 1.0 - p_val
+top_p_mask = cumsum_vals <= threshold_p
+is_last = v_offsets == (sort_size - 1)
+top_p_mask = top_p_mask & (~is_last)  # 强制保留最后一个元素
+
+# Step 5: Scatter back 到原始索引
+out_ptrs = out_ptr + sorted_idxs * stride
+ tl.store(out_ptrs, sorted_vals, mask=sorted_idxs < V)
+```
+
+**与 selection-sort 的本质区别**：
+| 步骤 | selection-sort | bitonic-sort |
+|------|---------------|--------------|
+| top-k 阈值 | 线性扫描找第 K 大 | 直接取 `sorted[sort_size - k]` |
+| top-p 判定 | 无法做（没有排序后顺序） | `cumsum_vals <= 1 - p` |
+| tie-breaking | 依赖迭代选择的顺序 | 由 sort 的 `use_tile` 精确控制 |
+| scatter | 通常不需要 | 通过 `sorted_idxs` 写回 |
+
+### 3.4 TopK + TopP 完整 ModelNew 结构
+
+```python
+class ModelNew(nn.Module):
+    def forward(self, logits, p, k):
+        B, V = logits.shape
+        BLOCK_SIZE_V = 256
+        sort_size = 1 << (max(V, BLOCK_SIZE_V) - 1).bit_length()
+
+        output = torch.empty_like(logits)
+        temp_vals = torch.empty((B, sort_size), dtype=torch.float32, device=logits.device)
+        temp_idxs = torch.empty((B, sort_size), dtype=torch.int32, device=logits.device)
+
+        grid = (VEC_CORE_NUM,)
+        topk_topp_kernel[grid](
+            logits, p, k, output,
+            temp_vals, temp_idxs,
+            B, V, sort_size,
+            # strides...
+            VEC_CORE_NUM=VEC_CORE_NUM,
+            BLOCK_SIZE_V=BLOCK_SIZE_V,
+        )
+        return output
+```

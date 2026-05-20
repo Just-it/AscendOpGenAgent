@@ -134,7 +134,7 @@ class ModelNew(nn.Module):
 | MatMul | matmul/bmm/linear/gemm 等矩阵乘法 | `@references/triton-ascend-matmul.md` |
 | Reduce | sum/mean/max/min/softmax/layernorm/logsoftmax 等归约操作 | `@references/triton-ascend-reduce.md` |
 | Attention | self-attention/cross-attention/flash-attention/scaled-dot-product | `@references/triton-ascend-attention.md` |
-| Sort/Select | nms 等排序选择操作 | `@references/triton-ascend-sort-select.md` |
+| Sort/Select | nms / topk / topp / argsort 等排序选择操作，或参考实现含 `torch.sort(stable=True)` / `torch.argsort(stable=True)` / 排序后 cumsum | `@references/triton-ascend-sort-select.md` |
 | Interpolate | Interpolate等插值操作 | `@references/triton-ascend-interpolate.md` |
 
 如果算子涉及多种类型（如融合算子），加载所有相关文档。

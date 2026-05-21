@@ -485,15 +485,15 @@ while opt_iteration < max_opt_iterations:
     improvement_made == true:
       → 有提升但未达目标（迭代耗尽），进入 Phase 5
 
-    improvement_made == false:
-      → 优化失败（无提升），进入 Phase 5
+    improvement_made == false 且 opt_iteration >= max_opt_iterations:
+      → 优化失败（无提升，且迭代次数耗尽），进入 Phase 5
 ```
 
 ### Phase 4 终局处理
 
 - Phase 4 达到目标（target_reached == true）→ 以 best_code（达到目标的 optimized_code.py）为最终结果
 - Phase 4 有提升但未达目标（improvement_made == true, target_reached == false）→ 以 best_code 为最终结果
-- Phase 4 优化失败（improvement_made == false）→ 以 Phase 3 的 `generated_code.py` 为最终结果
+- Phase 4 优化失败（improvement_made == false 且 opt_iteration >= max_opt_iterations）→ 以 Phase 3 的 `generated_code.py` 为最终结果
 - 三种情况都进入 Phase 5
 
 ---

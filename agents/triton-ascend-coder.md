@@ -800,3 +800,82 @@ agent 收到 exit 2 时，必须按下表把它**等价映射**到对应 verify 
 - 专业、技术、简洁
 - 每完成一个 Phase 提供一行状态更新
 - 错误时清晰描述 + 建议操作
+
+---
+
+## Phase 7: 经验提炼与归档（算子探索成功后强制执行）
+
+⚠️ **本阶段为跨会话复用保障的关键闭环**。算子任务完成后，必须将验证过的设计决策和性能数据沉淀到项目级 memory，供后续同类算子复用。
+
+### 触发条件
+
+必须同时满足：
+1. `summary.json` 中 `"success": true`
+2. `passed_cases == total_cases > 0`
+3. `speedup_vs_torch` 为有限正数（几何平均有效）
+
+### 执行步骤
+
+**Step 1: 人工提炼 Layer 1-3（Agent 必须完成）**
+
+从本次探索中提取可复用经验，按**四层隔离模型**写入对应类别文件：
+
+- **Layer 1（设计约束）**：硬性必须遵守的规则（如 "constant 模式必须拆分为 fill + copy"）
+- **Layer 2（算法骨架）**：核心并行策略的抽象描述（如 grid 分配模式、分支决策树）
+- **Layer 3（关键技巧）**：5-15 行已验证有效的代码片段，标注"可替代方向"
+
+目标文件：`.claude/memory/kernel-opt-{category}.md`
+
+若该算子类别**首次归档**，先初始化经验文件模板：
+```bash
+python3 utils/exp-init.py {category} --op-name {op_name}
+```
+
+**Step 2: 物理归档 Layer 4（自动工具）**
+
+运行归档命令：
+```bash
+python3 utils/exp-archive.py {work_dir} --create-experience
+```
+
+该命令自动完成：
+- 校验归档条件（success、精度全过、加速比有效）
+- 复制 `{op_name}_generated.py` → `archive/{category}/{category}_v{N}_{date}.py`
+- 复制 `report.md` → `archive/{category}/{category}_v{N}_{date}_report.md`
+- 复制 `summary.json` → `archive/{category}/{category}_v{N}_{date}_summary.json`
+- 版本号 N 按 archive 目录已有版本自动递增
+- 更新 `MEMORY.md` 索引
+- `--create-experience` 若该类别尚无经验文件，自动基于模板创建
+
+**Step 3: 规范验证（强制）**
+
+运行检查命令：
+```bash
+python3 utils/exp-check.py
+```
+
+要求：**0 失败、0 警告**。任何失败项必须在结束会话前修复。
+
+### 四层隔离复用规则（跨会话）
+
+| 层级 | 内容 | 受众 | 访问规则 |
+|------|------|------|---------|
+| Layer 1 | 设计约束、禁止事项 | `kernel-designer` | 必须作为 negative_prompt 遵守 |
+| Layer 2 | 算法骨架、并行策略 | `kernel-designer` | 仅作参考方向，输出必须是全新草图 |
+| Layer 3 | 关键代码片段 | `kernel-generator` / `latency-optimizer` | 技巧可参考但不可复制，变量名/结构必须重新设计 |
+| Layer 4 | 完整历史代码路径 | **默认对 Agent 不可见** | 仅在用户明确指令对比时才可读取 |
+
+### 关键保障机制
+
+1. **统一存储**：所有经验文件位于项目根目录 `.claude/memory/` 下，**所有会话共享同一套 memory**
+2. **自动发现**：`kernel-designer` skill 在 Phase 2 必须查询并读取对应类别的 `kernel-opt-{category}.md`（仅 Layer 1-3）
+3. **防复制**：Prompt 中必须包含"历史经验仅供启发，禁止直接复制代码结构"
+4. **多样性保护**：若新实现采用与历史完全不同的思路且通过验证，将该思路**并列记录**到经验文件，而非覆盖旧经验
+
+### 失败处理
+
+| 场景 | 处理 |
+|------|------|
+| summary.json 不满足归档条件 | 禁止归档，在 report.md 中标注"未达归档标准" |
+| exp-check.py 报告失败 | 必须修复失败项后方可结束会话 |
+| 经验文件已存在 | `exp-archive.py` 仅更新 MEMORY.md 和 archive；Layer 1-3 由 Agent 手动追加到已有经验文件 |

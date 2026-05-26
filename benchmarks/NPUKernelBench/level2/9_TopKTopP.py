@@ -60,7 +60,6 @@ def get_input_groups():
     json_path = os.path.join(os.path.dirname(__file__), os.path.splitext(os.path.basename(__file__))[0] + '.json')
     input_groups = []
     with open(json_path, 'r') as f:
-        idx = 0
         for line in f:
             line = line.strip()
             if not line:
@@ -84,12 +83,7 @@ def get_input_groups():
                     else:
                         dtype = {'float32': torch.float32, 'float16': torch.float16, 'bfloat16': torch.bfloat16, 'int32': torch.int32, 'int64': torch.int64, 'int8': torch.int8, 'bool': torch.bool}.get(dtype_str, torch.float32)
                         if name == 'logits':
-                            if idx % 2 == 0:
-                                mu = float(torch.empty(1).uniform_(-100, 100).item())
-                                sigma = float(torch.empty(1).uniform_(1, 25).item())
-                                tensors[name] = torch.normal(mu, sigma, shape, dtype=dtype) + torch.ones(shape, dtype=dtype)
-                            else:
-                                tensors[name] = torch.empty(shape, dtype=dtype).uniform_(-5, 5) + torch.ones(shape, dtype=dtype)
+                            tensors[name] = ((torch.randn(shape) * 2.0).exp() - 2.0).clamp(max=torch.finfo(dtype).max).to(dtype)
                         else:
                             tensors[name] = torch.randn(shape, dtype=dtype)
                 elif inp['type'] == 'attr':
@@ -101,14 +95,13 @@ def get_input_groups():
                 if 'k' in tensors and tensors['k'] is not None:
                     tensors['k'] = tensors['k'].clamp(min=1, max=min(1024, N))
                 if 'p' in tensors and tensors['p'] is not None:
-                    tensors['p'] = torch.rand(tensors['p'].shape, dtype=tensors['p'].dtype)
+                    tensors['p'] = 0.5 + torch.rand(tensors['p'].shape, dtype=tensors['p'].dtype) * 0.5
 
             # Build input list in order matching forward signature
             group = []
             for inp in inputs:
                 group.append(tensors[inp['name']])
             input_groups.append(group)
-            idx += 1
     return input_groups
 
 

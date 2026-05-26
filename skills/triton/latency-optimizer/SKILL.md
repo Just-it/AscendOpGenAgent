@@ -45,11 +45,15 @@ def kernel(A, B, C, M, N,
 1. 遍历 kernel 参数列表，排除明确属于运行时变量的参数：
   - 张量数据指针（如 input_ptr, output_ptr）
   - 动态维度（如 batch size M/N/K、序列长度 seq_len）
-  - 标量动态值（如缩放因子 scale，若每轮调用不同）
-2. 对剩余参数逐一检查是否满足"单次 kernel 启动后不变"：
-  - stride 参数（stride_am, stride_bn 等）→ 涉及 
+  - **仅在单次 kernel 执行期间变化**的标量动态值（如逐元素的缩放因子，每个 thread 的值都不同）
+2. 对剩余参数逐一检查是否满足"单次 kernel 启动后不变"（即该次 `kernel[grid](...)` 调用传入后，在整个 grid 执行期间不变）：
+  - stride 参数（stride_am, stride_bn 等）→ 涉及
   - 固定索引（如 lse_idx, head_idx_offset）→ 涉及
   - BLOCK_SIZE / HEAD_DIM / N_ROUNDED 等配置参数 → 涉及
+  - **启动级常量**（如 repeat 次数 `r`、操作轴 `axis`、reduce 维度 `dim`）→ **涉及**
+    - 此类参数虽然在 `forward()` 内的多次 `kernel[grid]()` 之间可能变化，但在**单次启动内固定**
+    - Triton Ascend 编译器会在每次启动时根据传入的 `constexpr` 值进行**启动级特化**（launch-level specialization），生成特化代码
+    - 典型收益：触发 `for i in range(r)` 等循环的编译期 unroll，消除标量循环开销
 3. 若第2步中任一参数未声明 `tl.constexpr` → 命中，进入参考文档
 4. 若第2步中无参数或已全部声明 `tl.constexpr` → 不涉及，跳过
 
@@ -393,7 +397,42 @@ for i in range(HEAD_NUM):
 
 ---
 
-### 优化点 12：Autotune 自动调优
+### 优化点 12：Grid 形状与多路径特化
+
+**适用条件**：单一 kernel 实现无法在不同 workload 规模下同时达到最优，且 Host 侧可在运行时根据 workload 特征选择不同 kernel 路径
+
+**典型代码特征**：
+```python
+# 特征 1：grid 被钳制到核数，导致小 workload 时调度开销占比高
+grid = (min(total_blocks, num_cores),)
+
+# 特征 2：kernel 内存在兼容大小 grid 的通用循环结构
+blocks_per_core = total_blocks // num_cores
+remainder = total_blocks % num_cores
+if pid < remainder:
+    my_blocks = blocks_per_core + 1
+    ...
+for block_idx in range(start_block, start_block + my_blocks):
+    ...  # 小 grid 时循环只执行 1 次，但分区计算无法消除
+
+# 特征 3：同一算子同时存在 total_blocks << num_cores 和 total_blocks >> num_cores 两种 workload
+```
+
+**判断逻辑**：
+1. 检查 grid 计算逻辑：是否存在 `min(total_blocks, num_cores)`、`clamp(grid, ...)` 等钳制逻辑
+2. 检查 kernel 内部：是否存在为了兼容“program 可能处理多 block”而引入的标量分区循环、分支判断
+3. 检查 workload 分布：同一算子在不同 shape 下是否同时出现以下两种场景：
+   - `total_blocks <= num_cores`（小 grid，每个 program 本可直接映射 1 个 block）
+   - `total_blocks > num_cores`（大 grid，必须进行多核分区）
+4. 如果以上任一成立 → 涉及
+
+**命中条件**：单一 kernel 无法同时最优覆盖小 grid 和大 grid 场景，且 Host 侧有条件做动态 dispatch
+
+**参考文档**：`references/grid-dispatch-specialization.md`
+
+---
+
+### 优化点 13：Autotune 自动调优
 
 **适用条件**：代码中存在一个或者多个可调参数（例如BLOCK_SIZE、BLOCK_M等），且这些参数未经过充分调优，考虑到其他优化点可能引入可调超参数，最后再优化该优化点
 
@@ -420,7 +459,7 @@ kernel[grid](..., BLOCK_M=128, BLOCK_N=128)
 
 ---
 
-### 优化点 13：混合策略自动选择
+### 优化点 14：混合策略自动选择
 
 **适用条件**：同一算子在不同 shape 或数据类型下需要不同优化策略
 
@@ -503,6 +542,7 @@ else:
 | Libdevice 函数使用 | `references/libdevice-usage.md` |
 | 循环不变量外提 | `references/loop-invariant-hoisting.md` |
 | Load 指令重排序 | `references/load-order.md` |
+| Grid 形状与多路径特化 | `references/grid-dispatch-specialization.md` |
 | Autotune 自动调优 | `references/autotune.md` |
 | 混合策略自动选择 | `references/mixed_strategy.md` |
 | 代码规范检查 | `references/checklist.md` |

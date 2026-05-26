@@ -136,9 +136,21 @@ python3 -c "import datetime,random; ts=datetime.datetime.now().strftime('%Y%m%d_
 
 调用 `kernel-designer` skill，设计算法草图。
 
+**前置检查**：
+1. 检查 `.claude/memory/kernel-opt-{category}.md` 是否存在。若存在，skill 调用方必须确保该文件被 skill 加载（通过显式传入路径或 skill 自动发现）。
+2. 若该文件存在，其 Layer 1 约束视为本次草图设计的**硬性边界**。
+
 **传入**：`op_name`、`task_desc`（任务文件完整内容）、`arch`、`user_requirements`（如有）。
 
 **产出**：`{工作目录}/sketch.txt`。
+
+**Layer 1 合规检查门（强制）**：
+- sketch 产出后，Agent 必须读取 `kernel-opt-{category}.md` 的 Layer 1 约束，逐条核对 `sketch.txt` 是否兼容。
+- 若发现冲突（如 Layer 1 禁止单 kernel 展平但草图设计为 flat-kernel；Layer 1 要求逐维度处理但草图无维度循环等），**视为 A 类错误**，必须：
+  1. 不进入 Phase 3
+  2. 将冲突点作为 `conductor_suggestion` 反馈给 `kernel-designer`
+  3. 重新执行 Phase 2，直到草图与 Layer 1 兼容
+- 该检查门最多重试 2 次，若仍无法通过，终止任务并报告"草图架构与历史 Layer 1 约束持续冲突"。
 
 仅执行一次，后续 Phase 3 迭代不再重新设计草图。
 

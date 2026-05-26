@@ -39,6 +39,8 @@ argument-hint: >
 
 - `@references/sketch-design.md` — UnifiedSketch DSL 语法规范、核心操作、设计模式、最佳实践
 
+- **算子类别经验文件**（若存在）：`{project_root}/.claude/memory/kernel-opt-{category}.md`。该文件包含经过验证的 **Layer 1 设计约束**（硬性规则，必须遵守）和 **Layer 2 算法骨架**（可参考的架构方向）。设计前必须读取并理解。若草图架构与 Layer 1 任何一条冲突，必须重新设计草图，**不得将冲突下放到代码生成阶段**。
+
 - **硬件规格**（按 `arch` 选择对应文件，位于 `kernel-generator/references/` 目录）：
 
   | arch | 文档 |
@@ -107,6 +109,15 @@ argument-hint: >
 
 **直接输出** `sketch op_name { ... }` 格式的算法草图，如果任务描述中包含 hint 标记，在草图末尾附上"设计适用范围"注释（格式见 `hint-mode.md`）。
 
+**架构决策标注**：在 sketch 开头必须添加注释，说明核心架构选择的依据：
+```python
+# @architecture_decision("per-dimension-serial", reason="符合 kernel-opt-repeat.md L1.2/L1.4 逐维度串行约束")
+# @architecture_decision("flat-single-kernel", reason="...")  # 仅当经验文件明确允许或不存在时
+sketch op_name { ... }
+```
+
+**Layer 1 自检**：输出草图前，必须在思考过程中逐条核对 `kernel-opt-{category}.md` 的 Layer 1 约束，确认草图架构不触发任何禁止项。若存在冲突，必须在最终草图中修正，不得输出冲突架构。
+
 ---
 
 ## 设计原则
@@ -116,6 +127,8 @@ argument-hint: >
 - 考虑**目标硬件架构**的优化机会（并行度、内存访问模式、数据对齐）
 - 标注**优化点和权衡决策**（使用 `@llm_hint` 注解）
 - 数值正确性优先，性能次之
+- **历史经验优先**：若 `kernel-opt-{category}.md` 存在，其 Layer 1 约束为**硬性规则**，草图架构必须与之兼容。若通用设计模板与 Layer 1 冲突，**必须以 Layer 1 为准**
+- **禁止冲突架构**：草图中不得出现与 Layer 1 禁止项同义的抽象（如 Layer 1 禁止单 kernel 展平时，草图中不得出现 `map_output_to_input` 式的一维线性映射）
 
 ## 草图特点
 

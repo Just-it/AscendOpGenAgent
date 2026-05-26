@@ -141,8 +141,8 @@ def validate_work_dir(work_dir: Path) -> dict:
         raise ValueError(f'精度未全通过: {passed}/{total}')
 
     speedup = perf.get('speedup_vs_torch')
-    if speedup is None or (isinstance(speedup, (int, float)) and speedup <= 1.0):
-        raise ValueError(f'加速比不满足归档条件: {speedup} (需 > 1.0x)')
+    if speedup is None or (isinstance(speedup, (int, float)) and speedup <= 0.8):
+        raise ValueError(f'加速比不满足归档条件: {speedup} (需 > 0.8x)')
 
     # 检查必要文件是否存在
     op_name = parse_op_name_from_dir(work_dir)

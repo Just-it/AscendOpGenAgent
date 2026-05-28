@@ -105,6 +105,42 @@ argument-hint: >
 
 ---
 
+## 双 kernel 可采用判定
+
+当算子满足以下条件时，**可采用**双 kernel 结构（stats + apply）：
+
+**判定条件**（同时满足）：
+1. 算法需要两个阶段：
+   - 阶段 A：遍历数据计算统计量（reduce 操作：sum、mean、max、variance）
+   - 阶段 B：用统计量对原始数据做逐元素变换
+
+2. 两个阶段的并行粒度不同：
+   - 阶段 A 的并行单位（如 per-group、per-row）
+   - 阶段 B 的并行单位（如 per-channel、per-element）
+
+**典型可采用双 kernel 的算子**：
+- BatchNorm, LayerNorm, GroupNorm, InstanceNorm, RMSNorm
+- Softmax, LogSoftmax
+
+**双 kernel 的优势**（在草图中标注）：
+- stats 和 apply 各自可用最优 grid 配置
+- 避免单 kernel 中不同阶段的并行粒度冲突
+- 每个 kernel 更简单，编译器优化更充分
+
+**单 kernel 的适用场景**：
+- 统计维度和应用维度相同（如 LayerNorm 的 per-row）
+- 数据量极小，kernel 启动开销占比高
+- 内存带宽极度受限，中间结果存储代价高
+
+**草图标注要求**：
+如果判定可采用双 kernel，在草图中用 `@llm_hint: dual_kernel_candidate` 标注，
+并说明：
+- Kernel 1 的输入/输出/并行粒度
+- Kernel 2 的输入/输出/并行粒度
+- 中间结果（mean/rstd）的存储方式
+
+---
+
 ## 输出要求
 
 **直接输出** `sketch op_name { ... }` 格式的算法草图，如果任务描述中包含 hint 标记，在草图末尾附上"设计适用范围"注释（格式见 `hint-mode.md`）。

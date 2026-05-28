@@ -492,9 +492,73 @@ else:
 
 ---
 
+### 优化点 14：维度合并与大 BLOCK 累加（归一化算子专用）
+
+**适用条件**：
+- 算子类型为 BatchNorm / LayerNorm / GroupNorm / InstanceNorm / RMSNorm / Softmax
+- 代码中存在对 stats unit（group / row / channel）内元素的归约操作
+- 当前实现使用嵌套循环或多通道分块累加
+
+**典型代码特征（问题模式）**：
+```python
+# 特征 1：嵌套循环处理连续维度
+for c in range(c_start, c_end):
+    for hw_block in range(0, L, BLOCK_HW):
+        vals = tl.load(x_ptr + idx, mask=mask, other=0.0)
+        sum_val += tl.sum(vals)  # 小量多次标量累加
+
+# 特征 2：mask 覆盖率过低
+BLOCK_HW = 256
+L = H * W  # 若 L=16，mask 覆盖率仅 6.25%
+
+# 特征 3：标量累加次数远大于向量化加载次数
+# 如：3584 次标量累加 vs 14 次向量化加载
+```
+
+**判断逻辑**：
+1. 检查 stats kernel 中是否存在嵌套循环处理连续维度
+2. 检查 `tl.load` 的 mask 覆盖率是否 < 50%
+3. 检查标量累加次数是否 > `max(16, total_elements / 4096)`
+4. 若任一条件满足 → 命中
+
+**优化动作**：
+1. 将 stats unit 内所有元素展平为一维连续块：
+   `group_elements = channels_per_group * HW`
+2. 基地址直接定位到 stats unit 起始：
+   `x_base = x_ptr + n * CHW + g * channels_per_group * HW`
+3. 使用单循环大 BLOCK 遍历：
+   ```python
+   for offset in range(0, group_elements, BLOCK_SIZE):
+       idx = offset + tl.arange(0, BLOCK_SIZE)
+       mask = idx < group_elements
+       val = tl.load(x_base + idx, mask=mask, other=0.0).to(tl.float32)
+       mean_acc += tl.sum(val, axis=0)
+       var_acc += tl.sum(val * val, axis=0)
+   ```
+4. BLOCK_SIZE 自适应选择：
+   | group_elements | fp32 | fp16/bf16 |
+   |---------------|------|-----------|
+   | < 1024 | 向上取整到 2^n | 向上取整到 2^n |
+   | 1024 ~ 8191 | 1024 | 1024 |
+   | 8192 ~ 32767 | 1024 | 2048 |
+   | >= 32768 | 1024 | 4096 |
+
+**预期收益**：
+- 性能：减少循环开销，提高向量利用率，减少 mask 浪费
+- 精度：减少标量累加次数（从数千次降到十几次），避免 float16 累积误差
+- 典型提升：0.3x → 0.8x（同时解决精度失败）
+
+**验证要求**：
+- 精度验证必须通过（特别关注 `num_groups=1, C` 很大、`HW` 很小的 case）
+- 性能不劣化
+
+**参考文档**：`../kernel-generator/references/triton-ascend-reduce.md`（"Stats Kernel 精度保障：累加模式规范"章节）
+
+---
+
 ## 优化流程
 ```
-1. 按顺序检查优化点 1 → 2 → 3 → ... → 13
+1. 按顺序检查优化点 1 → 2 → 3 → ... → 13 → 14
 2. 对于当前优化点，先判断是否命中（代码特征满足 + 适用条件成立）：
    - 未命中 → 跳过，检查下一优化点
    - 命中 → 参考对应文档，应用优化策略
@@ -545,4 +609,5 @@ else:
 | Grid 形状与多路径特化 | `references/grid-dispatch-specialization.md` |
 | Autotune 自动调优 | `references/autotune.md` |
 | 混合策略自动选择 | `references/mixed_strategy.md` |
+| 维度合并与大 BLOCK 累加 | `../kernel-generator/references/triton-ascend-reduce.md` |
 | 代码规范检查 | `references/checklist.md` |

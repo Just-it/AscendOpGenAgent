@@ -1,0 +1,11 @@
+{
+  "ip": "你的服务器IP",
+  "username": "root",
+  "auth_method": "key",
+  "password": "",
+  "ssh_key_path": "你的密钥文件路径",
+  "docker_container": "你的容器名称",
+  "host_temp_dir": "/tmp/triton_upload",
+  "docker_working_dir": "/root/MyAICode",
+  "npu_device": "0"
+}

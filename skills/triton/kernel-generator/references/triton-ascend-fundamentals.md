@@ -53,7 +53,46 @@ def launch_kernel(input_tensor, output_tensor):
     )
 ```
 
-### 1.4 边界处理（Mask）
+### 1.4 NPU 最优 Grid 模式
+
+**NPU 与 GPU 的 Grid 语义差异**：
+
+| 特性 | GPU | NPU |
+|------|-----|-----|
+| Grid 含义 | 逻辑并行实例数 | 直接映射到物理核 |
+| 超额订阅 | SM 自动调度 | AI Core 按顺序执行 |
+| 最优 Grid | 可远大于 SM 数 | min(实际需要, AI Core 数) |
+
+**NPU 推荐模式：1D Grid + 交织循环**
+
+当 work items 数量不确定（可能大于或小于核数）时，使用以下模式：
+
+```python
+@triton.jit
+def kernel(...):
+    pid = tl.program_id(0)
+    num_cores = tl.num_programs(0)
+    
+    for idx in range(pid, total_items, num_cores):
+        # 处理第 idx 个任务
+        ...
+
+# Host 端
+VEC_CORE_NUM = 48  # 或从设备属性获取
+grid = (min(total_items, VEC_CORE_NUM),)
+kernel[grid](..., multibuffer=True)
+```
+
+**优势**：
+- total_items < VEC_CORE_NUM：只有 total_items 个核工作，其余不启动，避免空转
+- total_items > VEC_CORE_NUM：每个核处理多个任务，天然负载均衡
+- 无需复杂的 grid 维度设计
+
+**禁止模式**：
+- 多维 grid（如 grid=(N, num_groups)）：除非两个维度都接近核数，否则容易某些维度 block 数不足
+- 固定 grid=(num_cores,)：小数据量时导致核空转
+
+### 1.5 边界处理（Mask）
 
 使用 mask 防止越界访问，确保只处理合法范围内的数据：
 
@@ -63,9 +102,9 @@ x = tl.load(in_ptr0 + x_index, mask=xmask, other=0.0)
 tl.store(out_ptr0 + x_index, ret, mask=xmask)
 ```
 
-### 1.5 编程模式
+### 1.6 编程模式
 
-#### 1.5.1 向量操作模式
+#### 1.6.1 向量操作模式
 适用于元素级运算：加法、乘法、激活函数等。
 
 ```python
@@ -82,7 +121,7 @@ def vector_add_kernel(a_ptr, b_ptr, c_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
     tl.store(c_ptr + offsets, c, mask=mask)
 ```
 
-#### 1.5.2 归约模式
+#### 1.6.2 归约模式
 适用于求和、最大值、最小值等聚合操作。
 
 ```python
@@ -103,7 +142,7 @@ def reduction_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr
         tl.atomic_add(output_ptr, block_sum)
 ```
 
-#### 1.5.3 矩阵乘法模式
+#### 1.6.3 矩阵乘法模式
 使用块指针高效处理 2D 数据。
 
 ```python
@@ -146,7 +185,7 @@ def matmul_kernel(a_ptr, b_ptr, c_ptr, M, N, K, stride_am, stride_ak, stride_bk,
     tl.store(c_block_ptr, accumulator, boundary_check=(0, 1))
 ```
 
-### 1.6 Autotune 使用
+### 1.7 Autotune 使用
 
 Triton 支持 `autotune` 自动调优，但 **Ascend NPU 不支持 `num_warps`、`num_ctas`、`num_stages` 等 CUDA 专用调优参数**。在 Ascend 上主要调优：
 

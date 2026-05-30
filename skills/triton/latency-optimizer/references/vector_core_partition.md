@@ -501,6 +501,22 @@ grid = (grid_size,)
 | `unit_flag=True` | 生成独立的计算单元 | 简单算子，无复杂控制流 |
 | `unit_flag=False` | 不生成独立单元 | 复杂算子，有分支 |
 
+### multibuffer 的 UB 安全检查
+
+在建议 `multibuffer=True` 前，必须先计算 UB 预算：
+
+```
+UB_needed = ROWS_PER_BLOCK * BLOCK_COL * dtype_size * num_buffers
+# num_buffers 包含: input, output, intermediate, weight, bias 等
+# multibuffer=True 时 num_buffers 翻倍
+```
+
+若 `UB_needed > 192KB`，应自动降级为 `multibuffer=False` 或减小 tile。
+
+经验公式：
+- `ROWS_PER_BLOCK * BLOCK_COL > 12288` (float32) → 不启用 multibuffer
+- `ROWS_PER_BLOCK * BLOCK_COL > 24576` (float16) → 不启用 multibuffer
+
 ### 使用方式
 
 ```python

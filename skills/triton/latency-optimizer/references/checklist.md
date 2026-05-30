@@ -40,7 +40,19 @@ num_vectorcore = device_properties.get("num_vectorcore", -1)
 ```
 
 ### 6. Task 任务划分规范
-- [ ] task 任务划分禁止使用交织划分，每个 grid 任务处理的数据尽可能连续
+- [ ] task 任务划分应优先使用**连续划分**：每个 grid 任务处理的数据尽可能连续
+- [ ] 当总任务数可变（可能大于或小于物理核数）时，允许使用**交织划分**（interleaved loop）：
+  ```python
+  pid = tl.program_id(0)
+  num_cores = tl.num_programs(0)
+  for idx in range(pid, total_items, num_cores):
+      # 处理 idx
+  ```
+  这种模式下，每个 program 处理多个均匀分布的任务，适用于：
+  - 总任务数 >> 核数（避免 grid 过大）
+  - 总任务数 < 核数（避免核空转）
+  - 任务负载不均衡（天然负载均衡）
+- [ ] 禁止的是"随机/非均匀交织"，而非"步长 = num_cores 的均匀交织"
 
 ### 7. 控制流规范
 - [ ] 禁止在 triton 代码中使用 `continue` 和 `break` 语句

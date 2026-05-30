@@ -105,6 +105,8 @@ class ModelNew(nn.Module):
 
 ### 必选知识（每次生成都加载）
 
+- **算子类别经验文件**（若存在）：`{project_root}/.claude/memory/kernel-opt-{category}.md`。该文件包含经过验证的 **Layer 1 设计约束**（硬性规则）。若其 Layer 1 约束与传入的 `sketch` 冲突，**必须以 Layer 1 约束为准**修正代码架构，不得盲目遵循一个已知劣化的草图。
+
 - **硬件规格**（按 `arch` 选择对应文件）：
 
   | arch | 文档 |
@@ -145,7 +147,12 @@ class ModelNew(nn.Module):
 
 当传入了 `sketch`（kernel-designer 生成的算法设计草图）时，**必须以草图为基础进行代码实现** ，充分利用其中的算法思路和优化策略。
 
-如果没有传入 `sketch`，则根据 `task_desc` 自行设计实现方案。
+**草图与经验冲突时的修正义务**：若 `kernel-opt-{category}.md` 存在且其 Layer 1 约束与 `sketch` 架构冲突（例如草图要求单 kernel 展平多维 repeat，但 Layer 1 强制要求逐维度串行），**代码生成器有义务修正架构错误**，而非盲目遵循草图。此时应：
+1. 以 Layer 1 约束为硬性边界重新设计代码结构
+2. 保留草图中不冲突的部分（如 tile_size、数据类型处理、向量化策略）
+3. 在代码注释中标注修正原因，例如：`# 修正 sketch 的 flat-kernel 架构为 per-dimension serial，以符合 kernel-opt-{category}.md Layer 1 约束`
+
+如果没有传入 `sketch`，则根据 `task_desc` 和 `kernel-opt-{category}.md`（若存在）自行设计实现方案。
 
 ---
 
@@ -179,6 +186,16 @@ class ModelNew(nn.Module):
 3. **保留优点**：保留上一轮代码中正确的部分，只修改有问题的部分
 4. **针对性修复**：不做不必要的大规模重构
 5. **避免重复**：如果建议中提到了历史教训，确保不犯同样的错误
+
+### 模式 4: 草图与经验冲突时的修正生成
+
+当 `sketch` 与 `kernel-opt-{category}.md` 的 Layer 1 约束冲突时：
+
+1. **识别冲突**：对比草图架构与 Layer 1 的硬性规则，列出所有冲突点
+2. **架构修正**：以 Layer 1 为边界重新设计代码骨架。例如草图要求单 kernel 展平，但经验要求逐维度串行 → 改为 Host 侧循环 + 多 kernel 启动
+3. **细节复用**：保留草图中与 Layer 1 不冲突的优化细节（如 BLOCK 大小策略、mask 处理方式）
+4. **显式标注**：在代码注释中说明每一处因 Layer 1 约束而偏离草图的地方
+5. **完整性保证**：确保修正后的代码仍然满足 sketch 中描述的功能语义和数值正确性
 
 ---
 

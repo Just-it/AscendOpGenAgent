@@ -4,18 +4,23 @@
 Python replacement for baseline.sh — avoids bash-on-Windows path mangling.
 
 Usage:
-    python .autoresearch/scripts/baseline.py <task_dir> [--device-id N]
+    python .autoresearch/scripts/engine/baseline.py <task_dir> [--device-id N]
 """
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPTS_ROOT = os.path.dirname(SCRIPT_DIR)
+sys.path.insert(0, SCRIPTS_ROOT)
 sys.path.insert(0, SCRIPT_DIR)
-from phase_machine import parse_last_json_line
-from failure_extractor import format_for_stdout
+from utils.failure_extractor import format_for_stdout
+from utils.json_io import parse_last_json_line
+from workflow import run_baseline_init
 
 
 def main():
@@ -32,10 +37,14 @@ def main():
         extra += ["--device-id", str(args.device_id)]
 
     print("[baseline] Running baseline eval...", flush=True)
-    ev = subprocess.run(
-        [sys.executable, os.path.join(SCRIPT_DIR, "eval_wrapper.py"), task_dir] + extra,
-        capture_output=True, text=True,
-    )
+    _eval_tmpdir = tempfile.mkdtemp(prefix="ar_eval_")
+    try:
+        ev = subprocess.run(
+            [sys.executable, os.path.join(SCRIPT_DIR, "eval_wrapper.py"), task_dir] + extra,
+            capture_output=True, text=True, cwd=_eval_tmpdir,
+        )
+    finally:
+        shutil.rmtree(_eval_tmpdir, ignore_errors=True)
     if ev.stderr:
         print(ev.stderr, end="", file=sys.stderr, flush=True)
 
@@ -63,8 +72,8 @@ def main():
         sys.exit(1)
 
     # Pretty-print structured failure signals (UB overflow, aivec trap, OOM,
-    # correctness mismatch, ...) — mirrors pipeline.py so the GENERATE_KERNEL
-    # → BASELINE flow surfaces the same actionable summary the EDIT loop does.
+    # correctness mismatch, ...) — mirrors pipeline.py so the seed-failure
+    # → PLAN flow surfaces the same actionable summary the EDIT loop does.
     if not eval_data.get("correctness", False) or eval_data.get("error"):
         if eval_data.get("error"):
             print(f"[baseline] Error: {eval_data['error']}", flush=True)
@@ -76,11 +85,11 @@ def main():
                   flush=True)
             print(eval_data["raw_output_tail"], flush=True)
 
-    rc = subprocess.run(
-        [sys.executable, os.path.join(SCRIPT_DIR, "_baseline_init.py"),
-         task_dir, json.dumps(eval_data)],
-    ).returncode
-    sys.exit(rc)
+    # In-process call (was a subprocess + JSON-on-argv round-trip via the
+    # now-deleted _baseline_init.py shell wrapper). The workflow.baseline
+    # body owns progress.json / history.jsonl / phase writes; running it
+    # here keeps stdout interleaving sane and removes the extra fork.
+    sys.exit(run_baseline_init(task_dir, json.dumps(eval_data)))
 
 
 if __name__ == "__main__":

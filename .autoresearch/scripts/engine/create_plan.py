@@ -6,8 +6,8 @@ Claude provides content, this script handles format. XML is preferred over JSON
 because LLMs hallucinate fewer structural/escape errors in tag-delimited text.
 
 Usage:
-    python .autoresearch/scripts/create_plan.py <task_dir>
-    python .autoresearch/scripts/create_plan.py <task_dir> '<items_xml>'
+    python .autoresearch/scripts/engine/create_plan.py <task_dir>
+    python .autoresearch/scripts/engine/create_plan.py <task_dir> '<items_xml>'
 
 The single-arg form (no <items_xml>) is preferred — it reads from the
 canonical path `<task_dir>/.ar_state/plan_items.xml`. The recommended
@@ -23,9 +23,12 @@ vs the actual `.ar_state/plan_items.xml` write target, etc.). With one
 hardcoded canonical path, the model can't transcribe it wrong because
 the model never types it twice.
 
-See `phase_machine._PLAN_XML_EXAMPLE` for the canonical schema (with
-inline schema-reminder comments). That constant is the single source of
-truth — keep this file's parsing rules in lockstep with it.
+See `phase_machine.guidance._PLAN_XML_EXAMPLE` for the canonical schema
+(with inline schema-reminder comments). That constant is the single
+source of truth — keep this file's parsing rules in lockstep with it.
+It is private to the `guidance` submodule and intentionally not
+re-exported from `phase_machine` itself; import from the submodule
+directly if you need to reach it.
 
 Behavior:
   Every successful run REPLACES plan.md's `## Active Items` with the new
@@ -59,7 +62,7 @@ import re
 import sys
 import xml.etree.ElementTree as ET
 
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from workflow import PlanStore
 from phase_machine import (
     load_progress, save_progress, plan_path, progress_path, PLAN_ITEMS_FILE,
@@ -289,7 +292,7 @@ def main():
     # was reversed and an unrelated NameError on the report line (a
     # leftover `ppath` reference from the pre-PlanStore code) crashed
     # the script after plan.md + progress.json had already been written
-    # - half-success state that hook_post_bash happily advanced past.
+    # - half-success state that hooks/post_bash happily advanced past.
     report = json.dumps({
         "ok": True,
         "version": version,

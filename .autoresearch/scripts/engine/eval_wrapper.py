@@ -6,7 +6,7 @@ Local-only. Uses task_config.run_eval to materialize the eval dir
 and dispatch verify/profile subprocesses.
 
 Usage:
-    python .autoresearch/scripts/eval_wrapper.py <task_dir> [--device-id N]
+    python .autoresearch/scripts/engine/eval_wrapper.py <task_dir> [--device-id N]
 
 Output (last line of stdout):
     {"correctness": true, "metrics": {"latency_us": 145.3}, "error": null}
@@ -17,10 +17,10 @@ import json
 import os
 import sys
 
-# Import from sibling module
-sys.path.insert(0, os.path.dirname(__file__))
+# scripts/ root in sys.path — pulls in task_config, utils, etc.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from task_config import load_task_config, run_eval, format_result_summary
-from failure_extractor import extract_failure_signals
+from utils.failure_extractor import extract_failure_signals
 
 
 def main():
@@ -34,6 +34,7 @@ def main():
     config = load_task_config(task_dir)
     if config is None:
         print(json.dumps({
+            "outcome": "infra_fail",
             "correctness": False,
             "metrics": {},
             "error": f"task.yaml not found in {task_dir}",
@@ -42,7 +43,7 @@ def main():
 
     # Probe the Ascend runtime up front so the log line tells the user
     # exactly why this run will / won't proceed.
-    from eval_runner import detect_local_backend
+    from utils.eval_runner import detect_local_backend
     ok, why = detect_local_backend()
     status = "available" if ok else "UNAVAILABLE"
     print(f"[eval] Running eval for {config.name} "
@@ -53,9 +54,14 @@ def main():
     print(f"[eval] {format_result_summary(result)}", file=sys.stderr)
 
     output = {
-        "correctness": result.correctness,
+        "outcome": result.outcome.value,           # authoritative classification
+        "correctness": result.correctness,         # kept for legacy readers
         "metrics": result.metrics,
         "error": result.error,
+        # error_source ("ref" | "kernel" | None): forwarded so baseline.py
+        # / scaffold can attribute blame without re-parsing the raw log.
+        # Scaffold uses error_source="ref" to refuse activating the task.
+        "error_source": result.error_source,
     }
     # Attach structured failure signals only when something went wrong — on
     # success the raw log is noisy and adds no value to downstream consumers.

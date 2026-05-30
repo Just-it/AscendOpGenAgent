@@ -238,12 +238,13 @@ x_cumsum = tl.cumsum(x_1d, axis=0)  # 一维张量，或 cumDim 是 lastDim
 
 ---
 
-### 优化点 7：Pass 合并优化
+### 优化点 7：Pass 消除合并优化
 
 **适用条件**：代码中存在多次遍历相同数据计算不同统计量
 
 **典型代码特征**：
 ```python
+# 特征 1：多个独立循环遍历相同数据
 # Pass 1: 计算 mean
 for ...:
     data = tl.load(...)
@@ -258,15 +259,30 @@ for ...:
 for ...:
     data = tl.load(...)  # 第三次加载
     tl.store(...)
+
+# 特征 2：kernel调用侧未根据实际 N 自适应计算 BLOCK_SIZE，而是传入固定值（如BLOCK_SIZE=1024）
+@triton.jit
+def kernel(..., N, BLOCK_SIZE: tl.constexpr):
+    for n_start in range(0, N, BLOCK_SIZE):  # 当 BLOCK_SIZE >= N 时可消除循环
+        ...
+
+kernel(..., N, BLOCK_SIZE=1024)
 ```
 
 **判断逻辑**：
+- 检查是否可以通过自适应计算 `BLOCK_SIZE` 消除循环：
+  - 如果 `BLOCK_SIZE` 当前是固定的 `tl.constexpr` 或者调用侧传入了固定值，而实际数据维度 `N` 是变量
+  - **无论当前 BLOCK_SIZE 是否已 >= N**：
+    - 若当前 BLOCK_SIZE < N：令 `BLOCK_SIZE = triton.next_power_of_2(N)` 可使得 `range(0, N, BLOCK_SIZE)` 从多次迭代变为仅迭代一次
+    - **若当前 BLOCK_SIZE 已 >= N：循环虽然只迭代一次，但固定 BLOCK_SIZE 在 N 较小时会产生大量无效 mask 计算（`tl.arange(0, 1024)` 仅前 64 个有效），浪费 Vector 单元周期，且可能占用过多 UB 影响并行度。必须将 BLOCK_SIZE 改为自适应计算。**
+  - 若满足 UB 约束（`BLOCK_SIZE * dtype_size * (input + output + 中间变量峰值) <= 192KB`）
+  - → 涉及，**必须同时执行：(a) 消除循环；(b) 将 `BLOCK_SIZE` 从固定值改为 Python 调用侧自适应计算后传入。二者缺一不可，禁止只做循环消除而保留固定 BLOCK_SIZE。**
 - 检查是否存在多个独立的循环遍历相同数据
-- 检查是否可以同时计算多个统计量（如 sum + sum_sq 可同时计算 mean + var）
-- 如果存在多次遍历且可合并 → 涉及
+  - 检查是否可以同时计算多个统计量（如 sum + sum_sq 可同时计算 mean + var）
+  - 如果存在多次遍历且可合并 → 涉及
 - 如果只有单次遍历，或统计量之间有依赖无法合并 → 不涉及，跳过
 
-**命中条件**：代码中存在多次遍历相同数据，且可以合并计算
+**命中条件**：代码中存在多次遍历相同数据，可通过自适应计算 BLOCK_SIZE 实现循环消除；或者可以对多次遍历进行合并计算
 
 **参考文档**：`references/pass-merge.md`
 
@@ -420,9 +436,42 @@ kernel[grid](..., BLOCK_M=128, BLOCK_N=128)
 
 ---
 
+### 优化点 13：消除冗余的边界运算
+
+**适用条件**：代码中存在 `tl.load(..., mask=m, other=d)` 加载数据后，后续纯算术运算链上又出现 `tl.where(m, ..., d)`、`* mask`、`+ 0`、`* 1` 等冗余边界保护运算
+
+**典型代码特征**：
+```python
+# 特征 1：tl.where 二次归零
+x = tl.load(ptr + idx, mask=m, other=0.0)
+x_sq = x * x
+x_sq = tl.where(m, x_sq, 0.0)  # 冗余：load 已保证边界为 0
+
+# 特征 2：乘法模拟 mask
+a = tl.load(ptr_a + idx, mask=m, other=0.0)
+b = tl.load(ptr_b + idx, mask=m, other=0.0)
+x = (a + b) * m.to(tl.float32)  # 冗余：边界处 a+b 已是 0
+```
+
+**判断逻辑**：
+- 检查是否存在 `tl.load(..., mask=m, other=d)` 或 `tl.full(d)` 作为数据源
+- 检查后续运算链是否为纯算术运算（`+ - * ** .to() exp abs max min sum` 等），不包括 `/ //`、store、控制流
+- 检查是否存在以下冗余运算：
+  - `tl.where(m, expr, d)`，且 `expr` 在 `m=False` 处的 KVR（已知值区域）可推导为 `d`
+  - `expr + 0.0`、`expr - 0.0`、`expr * 1.0`、`expr ** 1`、`-(-expr)` 等代数恒等式
+  - `tl.maximum(expr, d)` / `tl.minimum(expr, d)` / `tl.abs(expr)`，且 `expr` 已满足相应边界条件
+- 如果存在以上任一情况 → 涉及
+- 如果所有边界保护都是必要的（如运算链含除法、不同 mask、未受保护的 load） → 不涉及，跳过
+
+**命中条件**：代码中存在由 KVR（Known-Value Region）数据流分析可证的冗余边界保护运算
+
+**参考文档**：`references/redundant_boundary_operation.md`
+
+---
+
 ## 优化流程
 ```
-1. 按顺序检查优化点 1 → 2 → 3 → ... → 12
+1. 按顺序检查优化点 1 → 2 → 3 → ... → 13
 2. 对于当前优化点，先判断是否命中（代码特征满足 + 适用条件成立）：
    - 未命中 → 跳过，检查下一优化点
    - 命中 → 参考对应文档，应用优化策略
@@ -443,6 +492,14 @@ kernel[grid](..., BLOCK_M=128, BLOCK_N=128)
   直到所有优化点都不命中
 ```
 - 一次只能参考一个文档
+
+### 特殊优化模式：Ascend Pooling 算子系统性优化
+
+当算子为 Pooling 类（AvgPool/MaxPool，2D/3D）时，应在完成基础优化后，加载 `references/ascend-pooling-optimization.md`。该文档覆盖从访存模式、标量消除、编译策略、布局转换、边界检查消除、BLOCK 尺寸选择到 2D Tiling 的 **7 个 Phase** 系统性优化指南。
+
+**触发条件**：算子名包含 `Pool`（MaxPool/AvgPool, 2D/3D）
+
+**使用方式**：按 Phase 1→2→3→...→7 顺序逐一检查和应用，每个 Phase 独立验证精度和性能。
 
 ## 优化验证规则
 
@@ -465,10 +522,12 @@ kernel[grid](..., BLOCK_M=128, BLOCK_N=128)
 | 离散访存优化 | `references/discrete_memory_access.md` |
 | Scalar 转 Vector 优化 | `references/scalar_to_vector.md` |
 | 避免向量API标量降级 | `references/avoid_scalar_lowering.md` |
-| Pass 合并优化 | `references/pass-merge.md` |
+| Pass 消除合并优化 | `references/pass-merge.md` |
 | 维度合并优化 | `references/dimension-merge.md` |
 | Libdevice 函数使用 | `references/libdevice-usage.md` |
 | 循环不变量外提 | `references/loop-invariant-hoisting.md` |
 | Load 指令重排序 | `references/load-order.md` |
 | Autotune 自动调优 | `references/autotune.md` |
+| 消除冗余的边界运算 | `references/redundant_boundary_operation.md` |
+| Ascend Pooling 系统性优化 | `references/ascend-pooling-optimization.md` |
 | 代码规范检查 | `references/checklist.md` |

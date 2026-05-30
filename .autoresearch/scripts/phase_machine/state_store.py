@@ -35,8 +35,6 @@ from .models import Progress
 # ---------------------------------------------------------------------------
 
 INIT = "INIT"
-GENERATE_REF = "GENERATE_REF"
-GENERATE_KERNEL = "GENERATE_KERNEL"
 BASELINE = "BASELINE"
 PLAN = "PLAN"
 EDIT = "EDIT"
@@ -44,8 +42,7 @@ DIAGNOSE = "DIAGNOSE"
 REPLAN = "REPLAN"
 FINISH = "FINISH"
 
-ALL_PHASES = {INIT, GENERATE_REF, GENERATE_KERNEL, BASELINE, PLAN, EDIT,
-              DIAGNOSE, REPLAN, FINISH}
+ALL_PHASES = {INIT, BASELINE, PLAN, EDIT, DIAGNOSE, REPLAN, FINISH}
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +152,70 @@ def set_task_dir(task_dir: str):
     with open(_ACTIVE_TASK_FILE, "w") as f:
         f.write(os.path.abspath(task_dir))
     touch_heartbeat(task_dir)
+
+
+def find_active_task_dir() -> Optional[str]:
+    """Single source of truth for "which task is currently active".
+
+    Resume / dashboard / batch each historically maintained their own
+    rule for this lookup (resume trusted the .active_task pointer first,
+    dashboard scanned mtimes first, batch looked only at heartbeats).
+    Three rules for one question is a divergence risk — concurrent
+    sessions, stale pointers, or batch/manual mixes can make the tools
+    disagree about which task is "current". Everyone goes through this
+    helper now.
+
+    Resolution rule:
+      1. If `.autoresearch/.active_task` points at an existing task dir
+         → return it. Stale pointers (the task dir was deleted) get
+         removed in passing so the next call falls straight to step 2.
+      2. Otherwise scan `ar_tasks/` and pick the dir with the most-recent
+         signal — heartbeat first (touched every hook fire, freshest),
+         then progress.json mtime, then the dir's own mtime. Task dirs
+         missing `task.yaml` are ignored (not a real task).
+    Returns None if no task is found.
+    """
+    if os.path.exists(_ACTIVE_TASK_FILE):
+        try:
+            with open(_ACTIVE_TASK_FILE, "r") as f:
+                td = f.read().strip()
+        except OSError:
+            td = ""
+        if td and os.path.isdir(td):
+            return td
+        # Stale pointer — clean it so future callers skip step 1.
+        try:
+            os.remove(_ACTIVE_TASK_FILE)
+        except OSError:
+            pass
+
+    tasks_root = os.path.join(_PROJECT_ROOT, "ar_tasks")
+    if not os.path.isdir(tasks_root):
+        return None
+
+    best: Optional[str] = None
+    best_mt: float = -1.0
+    for name in os.listdir(tasks_root):
+        full = os.path.join(tasks_root, name)
+        if not os.path.isdir(full):
+            continue
+        if not os.path.exists(os.path.join(full, "task.yaml")):
+            continue
+        mt = -1.0
+        for candidate in (
+            state_path(full, HEARTBEAT_FILE),
+            progress_path(full),
+            full,
+        ):
+            if os.path.exists(candidate):
+                try:
+                    mt = max(mt, os.path.getmtime(candidate))
+                except OSError:
+                    pass
+        if mt > best_mt:
+            best_mt = mt
+            best = full
+    return best
 
 
 def touch_heartbeat(task_dir: str):
@@ -333,22 +394,7 @@ def update_progress(task_dir: str, **fields) -> Optional[Progress]:
     return new_progress
 
 
-# ---------------------------------------------------------------------------
-# Subprocess output parser (every script tail-emits a JSON line)
-# ---------------------------------------------------------------------------
-
-def parse_last_json_line(text: str) -> Optional[dict]:
-    """Scan `text` from the bottom up and return the last standalone JSON
-    object. Our pipeline/baseline/local-eval scripts all follow the protocol
-    "stdout last line is JSON"; this is the single place that reads it.
-    """
-    if not text:
-        return None
-    for line in reversed(text.splitlines()):
-        line = line.strip()
-        if line.startswith("{") and line.endswith("}"):
-            try:
-                return json.loads(line)
-            except json.JSONDecodeError:
-                continue
-    return None
+# Subprocess output parser lives in utils.json_io now (was duplicated
+# here and in task_config.eval_client). Importers that previously did
+# `from phase_machine import parse_last_json_line` should switch to
+# `from utils.json_io import parse_last_json_line`.

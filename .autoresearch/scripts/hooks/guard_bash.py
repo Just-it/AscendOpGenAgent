@@ -20,8 +20,8 @@ contract:
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(__file__))
-from hook_utils import read_hook_input, block_decision, block_with_guidance
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from hooks.utils import read_hook_input, block_decision, block_with_guidance
 from phase_machine import (
     DIAGNOSE, DIAGNOSE_ATTEMPTS_CAP, EDIT, REPLAN, read_phase,
     get_task_dir, touch_heartbeat, check_bash, parse_script_names,
@@ -29,14 +29,14 @@ from phase_machine import (
     is_single_foreground_ar_invocation,
     DIAGNOSE_NEED_DIAGNOSIS,
 )
-from settings import hallucinated_scripts
+from utils.settings import hallucinated_scripts
 
 # Real CLI scripts under .autoresearch/scripts/. Anything not listed
 # here (and not in _LIBRARY_NOT_CLI / hallucinated_scripts aliases) is
 # treated as an unknown script and rejected with a sorted list of
 # valid names.
 _BLESSED_SCRIPTS = {
-    "quick_check.py", "eval_wrapper.py", "keep_or_discard.py",
+    "quick_check.py", "eval_wrapper.py",
     "scaffold.py", "baseline.py", "dashboard.py",
     "create_plan.py", "settle.py", "pipeline.py", "resume.py",
     "parse_args.py",
@@ -55,17 +55,20 @@ _LIBRARY_NOT_CLI = {
     "task_config.py": "task_config.py is a library, not a CLI.",
     "settings.py": "settings.py is a library, not a CLI.",
     "hw_detect.py": "hw_detect.py is a library, not a CLI.",
-    "hook_utils.py": "hook_utils.py is a library, not a CLI.",
+    "utils.py": "hooks/utils.py is a library, not a CLI.",
     "failure_extractor.py": "failure_extractor.py is a library, not a CLI.",
     "validate_triton_impl.py": (
         "validate_triton_impl.py is a library used by quick_check.py "
         "(also runnable directly as the skill `kernel-verifier`'s Step 0)."
     ),
-    "_baseline_init.py": (
-        "_baseline_init.py is a subprocess child of baseline.py, not a "
-        "CLI. Run `python .autoresearch/scripts/baseline.py <task_dir>` "
-        "instead — it invokes _baseline_init.py for you."
+    "eval_kernel.py": (
+        "eval_kernel.py is a subprocess child of eval_wrapper.py "
+        "(invoked via utils.eval_runner.local_eval), not a CLI. Run "
+        "`python .autoresearch/scripts/engine/eval_wrapper.py <task_dir>` "
+        "instead — it invokes eval_kernel.py for you."
     ),
+    "eval_runner.py": ("eval_runner.py is a library used by "
+                       "task_config.eval_client + eval_wrapper, not a CLI."),
 }
 
 # Alias → real script mapping lives in .autoresearch/config.yaml under
@@ -130,7 +133,7 @@ def main():
     # plan.md, the agent has no legal action under normal EDIT rules
     # (kernel.py edits don't help; create_plan.py isn't in EDIT's
     # allowlist). If `.pending_settle.json` exists, allow create_plan.py
-    # as a recovery path; hook_post_bash clears the sidecar on successful
+    # as a recovery path; hooks/post_bash clears the sidecar on successful
     # create_plan validation.
     #
     # is_single_foreground_ar_invocation reuses the canonical-form regex

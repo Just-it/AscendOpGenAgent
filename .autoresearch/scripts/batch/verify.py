@@ -1,25 +1,17 @@
 """Pre-flight verification for batch directories.
 
-Two tiers:
-  Tier 1 (default, no hardware needed):
-    - Python syntax compiles
-    - Module imports cleanly (catches missing deps / syntax / import errors)
-    - Required symbols exist:
-        ref.py    : Model class + get_inputs + get_init_inputs
-        kernel.py : ModelNew class
-    - kernel.py only: triton-impl validator — kernel must actually use
-      @triton.jit, forward() must launch it, and forward() may not use
-      host-side for/while loops, forbidden torch.X / F.X / @ matmul.
-      Implementation: `.autoresearch/scripts/validate_triton_impl.py`.
+Tier 1 (default, no hardware): compile + import + required-symbol check
+on ref.py (Model + get_inputs + get_init_inputs) and kernel.py (ModelNew).
+Kernel.py also runs the triton-impl validator (`utils.validate_triton_impl`):
+must use @triton.jit, forward() must launch it, no host-side for/while
+loops, no forbidden torch.X / F.X / @ matmul.
 
-  Tier 2 (--full, needs the same hardware /autoresearch eval would use):
-    - Runs ref(*get_inputs()) and kernel(*get_inputs())
-    - allclose-style comparison: |diff| <= atol + rtol*|ref|
-      with per-dtype (rtol, atol) - see `correctness.py`.
-    - Only meaningful for --mode ref-kernel; --mode ref has no kernel to compare
+Tier 2 (--full): LOCAL smoke test. Loads both modules on `torch.npu:0`
+(or CPU), runs them, allclose via `utils.correctness`. NOT a proxy for
+the batch eval path — `batch/run.py` defaults to a remote worker, and
+a green --full says only "kernel runs locally".
 
-Each op is run in its own subprocess so import errors / device state in one op
-don't poison the others. Results land in <batch_dir>/verify_results.json.
+Each op runs in its own subprocess. Results: <batch_dir>/verify_results.json.
 
 Usage:
     python .autoresearch/scripts/batch/verify.py <batch_dir>             # Tier 1
@@ -41,9 +33,9 @@ import manifest as mf
 # Reach up one level for the shared precision module - single source of
 # truth so verify.py and autoresearch's per-round eval can't drift.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from correctness import compare_outputs_per_case  # noqa: E402
-from input_groups import resolve as _resolve_groups  # noqa: E402
-from validate_triton_impl import validate as _validate_kernel_code  # noqa: E402
+from utils.correctness import compare_outputs_per_case  # noqa: E402
+from utils.input_groups import resolve as _resolve_groups  # noqa: E402
+from utils.validate_triton_impl import validate as _validate_kernel_code  # noqa: E402
 
 VERIFY_RESULTS = "verify_results.json"
 TIER1_TIMEOUT = 30
@@ -174,10 +166,8 @@ def _tier2_run(ref_path: Path, kernel_path: Path) -> dict:
         out["msg"] = f"get_inputs/get_input_groups: {type(e).__name__}: {e}"
         return out
 
-    # Place models + inputs on NPU when available — kernels allocate output
-    # buffers via torch.empty_like(x), so a CPU input means a CPU output
-    # buffer the Triton kernel can't write to (max_rel ~= 1e12 garbage).
-    # Matches package_builder._gen_verify_script's _to_device dance.
+    # NPU when available; CPU otherwise. Kernels allocate output buffers
+    # via torch.empty_like(x), so CPU input → CPU output buffer → garbage.
     npu_mod = getattr(torch, "npu", None)
     if npu_mod is not None and getattr(npu_mod, "is_available", lambda: False)():
         device = torch.device("npu:0")
@@ -244,16 +234,9 @@ def _run_tier_subprocess() -> int:
     if args.tier == "1ref":
         result = _tier1_inspect(ref_path, REF_REQUIRED)
     elif args.tier == "1kernel":
-        if kernel_path is None:
-            result = {"compile": "skip", "import": "skip", "exports": "skip",
-                      "missing": [], "msg": "no kernel for this op"}
-        else:
-            result = _tier1_inspect(kernel_path, KERNEL_REQUIRED)
+        result = _tier1_inspect(kernel_path, KERNEL_REQUIRED)
     else:  # tier == "2"
-        if kernel_path is None:
-            result = {"status": "skip", "msg": "ref-only mode; no kernel to compare"}
-        else:
-            result = _tier2_run(ref_path, kernel_path)
+        result = _tier2_run(ref_path, kernel_path)
 
     Path(args.sidecar).write_text(json.dumps(result), encoding="utf-8")
     return 0
@@ -309,21 +292,19 @@ def _run_subprocess(*, tier: str, ref: Path, kernel: Path | None,
     return result
 
 
-def _verify_one(case: dict, mode: str, full: bool) -> dict:
+def _verify_one(case: dict, full: bool) -> dict:
     op = case["op_name"]
     ref = Path(case["ref"])
-    kernel = Path(case["kernel"]) if case.get("kernel") else None
+    kernel = Path(case["kernel"])
 
     out: dict = {"op_name": op, "tier1_ref": None, "tier1_kernel": None,
                  "tier2": None}
 
     out["tier1_ref"] = _run_subprocess(tier="1ref", ref=ref, kernel=None,
                                        timeout=TIER1_TIMEOUT)
-
-    if mode == "ref-kernel":
-        out["tier1_kernel"] = _run_subprocess(tier="1kernel", ref=ref,
-                                              kernel=kernel,
-                                              timeout=TIER1_TIMEOUT)
+    out["tier1_kernel"] = _run_subprocess(tier="1kernel", ref=ref,
+                                          kernel=kernel,
+                                          timeout=TIER1_TIMEOUT)
 
     def _t1_pass(rec: dict | None) -> bool:
         if not rec:
@@ -331,10 +312,9 @@ def _verify_one(case: dict, mode: str, full: bool) -> dict:
         # validate is "skip" for ref-side records (only kernel runs it).
         return (rec.get("exports") == "PASS"
                 and rec.get("validate") != "FAIL")
-    tier1_ok = _t1_pass(out["tier1_ref"]) and (
-        mode != "ref-kernel" or _t1_pass(out["tier1_kernel"]))
+    tier1_ok = _t1_pass(out["tier1_ref"]) and _t1_pass(out["tier1_kernel"])
 
-    if full and mode == "ref-kernel":
+    if full:
         if tier1_ok:
             out["tier2"] = _run_subprocess(tier="2", ref=ref, kernel=kernel,
                                            timeout=TIER2_TIMEOUT)
@@ -346,8 +326,12 @@ def _verify_one(case: dict, mode: str, full: bool) -> dict:
     return out
 
 
-def _summary_status(record: dict, mode: str, full: bool) -> str:
-    """Distill a single-letter overall status: P/F/E/S (Pass/Fail/Error/Skip)."""
+_CONTENT_FAIL_FIELDS = ("compile", "import", "exports", "validate")
+
+
+def _summary_status(record: dict, full: bool) -> str:
+    """P/F/E/S single-letter. compile/import/exports/validate failures
+    all map to F (matches the per-tier table column); runtime ERROR is E."""
     t1r = record["tier1_ref"]
     t1k = record["tier1_kernel"]
     t2 = record["tier2"]
@@ -357,13 +341,14 @@ def _summary_status(record: dict, mode: str, full: bool) -> str:
                                   t.get("exports"), t.get("validate"))
                       or t.get("status") in ("FAIL", "ERROR"))
 
+    def _content_fail(t):
+        return t and any(t.get(f) == "FAIL" for f in _CONTENT_FAIL_FIELDS)
+
     if _bad(t1r):
-        return "F" if t1r.get("compile") == "FAIL" or t1r.get("exports") == "FAIL" else "E"
-    if mode == "ref-kernel" and _bad(t1k):
-        return "F" if t1k and (t1k.get("compile") == "FAIL"
-                               or t1k.get("exports") == "FAIL"
-                               or t1k.get("validate") == "FAIL") else "E"
-    if full and mode == "ref-kernel" and t2:
+        return "F" if _content_fail(t1r) else "E"
+    if _bad(t1k):
+        return "F" if _content_fail(t1k) else "E"
+    if full and t2:
         if t2.get("status") == "PASS":
             return "P"
         if t2.get("status") == "FAIL":
@@ -374,7 +359,7 @@ def _summary_status(record: dict, mode: str, full: bool) -> str:
     return "P"
 
 
-def _print_table(results: dict, mode: str, full: bool) -> None:
+def _print_table(results: dict, full: bool) -> None:
     rows: list[tuple[str, str, str, str, str, str]] = []
     for op, rec in results.items():
         t1r = rec["tier1_ref"]
@@ -386,7 +371,7 @@ def _print_table(results: dict, mode: str, full: bool) -> None:
                 "FAIL" if t1r and (t1r.get("compile") == "FAIL"
                                    or t1r.get("import") == "FAIL") else "ERROR"))
 
-        if mode == "ref-kernel" and t1k is not None:
+        if t1k is not None:
             if t1k.get("validate") == "FAIL":
                 col_t1k = "FAIL"
             elif t1k.get("exports") == "PASS":
@@ -414,7 +399,7 @@ def _print_table(results: dict, mode: str, full: bool) -> None:
                               src.get("exports")) or src.get("status") in ("FAIL", "ERROR"):
                     break
         rows.append((op, col_t1r, col_t1k, col_t2,
-                     _summary_status(rec, mode, full), msg[:70]))
+                     _summary_status(rec, full), msg[:70]))
 
     op_w = max(8, max(len(r[0]) for r in rows))
     headers = ("op", "t1_ref", "t1_kern", "t2", "ok", "note")
@@ -425,8 +410,8 @@ def _print_table(results: dict, mode: str, full: bool) -> None:
         print(f"  {op:<{op_w}}  {t1r:<6}  {t1k:<7}  {t2:<6}  {ok:<3}  {msg}")
 
 
-def run_verification(batch_dir: Path, *, mode: str | None = None,
-                     full: bool = False, only: str = "") -> int:
+def run_verification(batch_dir: Path, *, full: bool = False,
+                     only: str = "") -> int:
     """Run the verification loop programmatically (so prepare.py and other
     scripts can call us without subprocessing). Returns the same exit code
     main() would: 0 if everything passed, 1 if any FAIL/ERROR. All output
@@ -441,14 +426,8 @@ def run_verification(batch_dir: Path, *, mode: str | None = None,
     except mf.ManifestError as e:
         sys.exit(str(e))
 
-    mode = mode or manifest_data.get("mode")
-    if not mode:
-        sys.exit("--mode is required (also accepted as `mode:` in manifest)")
-    if mode not in mf.VALID_MODES:
-        sys.exit(f"--mode must be one of {mf.VALID_MODES}, got {mode!r}")
-
     try:
-        cases = mf.resolve_cases(batch_dir, manifest_data, mode)
+        cases = mf.resolve_cases(batch_dir, manifest_data, "ref-kernel")
     except mf.ManifestError as e:
         sys.exit(f"manifest validation failed: {e}")
 
@@ -458,10 +437,7 @@ def run_verification(batch_dir: Path, *, mode: str | None = None,
         if not cases:
             sys.exit("--only filtered out all ops")
 
-    if full and mode == "ref":
-        print("note: --full has no effect in --mode ref (no kernel to compare)")
-
-    print(f"verify  batch_dir={batch_dir}  mode={mode}  "
+    print(f"verify  batch_dir={batch_dir}  "
           f"tier={'1+2' if full else '1'}  ops={len(cases)}  "
           f"precision: allclose-style (per-dtype rtol+atol)")
     print()
@@ -472,29 +448,29 @@ def run_verification(batch_dir: Path, *, mode: str | None = None,
         op = case["op_name"]
         sys.stdout.write(f"  [{i:>3}/{len(cases)}] {op} ... ")
         sys.stdout.flush()
-        rec = _verify_one(case, mode, full=full)
+        rec = _verify_one(case, full=full)
         results[op] = rec
-        ok = _summary_status(rec, mode, full=full)
+        ok = _summary_status(rec, full=full)
         sys.stdout.write(f"{ok}\n")
         sys.stdout.flush()
 
     out_path = batch_dir / VERIFY_RESULTS
     out_path.write_text(json.dumps({
-        "mode": mode, "full": full,
+        "full": full,
         "precision": "npu-benchmark-mere-mare",
         "results": results,
     }, indent=2), encoding="utf-8")
 
     print()
-    _print_table(results, mode, full=full)
+    _print_table(results, full=full)
     print()
 
     n_pass = sum(1 for op in results
-                 if _summary_status(results[op], mode, full) == "P")
+                 if _summary_status(results[op], full) == "P")
     n_fail = sum(1 for op in results
-                 if _summary_status(results[op], mode, full) == "F")
+                 if _summary_status(results[op], full) == "F")
     n_err = sum(1 for op in results
-                if _summary_status(results[op], mode, full) == "E")
+                if _summary_status(results[op], full) == "E")
     print(f"  total={len(results)}  pass={n_pass}  fail={n_fail}  "
           f"error={n_err}  elapsed={time.time()-t0:.1f}s")
     print(f"  results: {out_path}")
@@ -507,8 +483,6 @@ def main() -> int:
 
     ap = argparse.ArgumentParser(description="Pre-flight verify for batch directories.")
     ap.add_argument("batch_dir")
-    ap.add_argument("--mode", choices=mf.VALID_MODES,
-                    help="ref-kernel or ref (overrides manifest.mode)")
     ap.add_argument("--full", action="store_true",
                     help="also run Tier 2 (execute ref + kernel, compare outputs); "
                          "needs the same hardware /autoresearch eval would use")
@@ -518,7 +492,7 @@ def main() -> int:
 
     return run_verification(
         Path(args.batch_dir),
-        mode=args.mode, full=args.full, only=args.only,
+        full=args.full, only=args.only,
     )
 
 

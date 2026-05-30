@@ -6,6 +6,8 @@ downstream consumers (keep_or_discard, baseline_init, dashboard) read
 from it.
 
 What lives here:
+  - `EvalOutcome`          — classification enum, single source of truth for
+                             what happened (OK / kernel fail / infra fail).
   - `EvalResult`           — the result dataclass.
   - `is_improvement`       — current-vs-best comparison with relative-%
                              threshold and direction (`lower_is_better`).
@@ -22,16 +24,41 @@ import from here without dragging in YAML / urllib / tarfile.
 """
 import operator as _op
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Optional
+
+
+class EvalOutcome(str, Enum):
+    """What happened in eval. KERNEL_FAIL = agent can fix via PLAN→EDIT;
+    INFRA_FAIL = operator only (broken --ref, missing env, transport down)."""
+    OK = "ok"
+    KERNEL_FAIL = "kernel_fail"
+    INFRA_FAIL = "infra_fail"
+
+
+# Baseline outcomes the agent CANNOT recover from inside the EDIT loop.
+# Single source of truth for the "stuck" carve-out used by
+# PhaseController.on_baseline_settled, compute_resume_phase,
+# hooks/stop_save (early-Stop carve-out), hooks/post_bash (message
+# selection), and dashboard.py (banner choice).
+STUCK_BASELINE_OUTCOMES = frozenset({
+    EvalOutcome.INFRA_FAIL.value,
+})
 
 
 @dataclass
 class EvalResult:
-    """Evaluation result."""
-    correctness: bool
+    outcome: EvalOutcome = EvalOutcome.INFRA_FAIL
     metrics: dict = field(default_factory=dict)
     error: Optional[str] = None
     raw_output: str = ""
+    # "ref" → broken --ref file (the only sub-flavor of INFRA_FAIL the
+    # downstream messages distinguish). None on success or other failures.
+    error_source: Optional[str] = None
+
+    @property
+    def correctness(self) -> bool:
+        return self.outcome == EvalOutcome.OK
 
 
 # ---------------------------------------------------------------------------
@@ -99,11 +126,12 @@ def is_improvement(
 
 def format_result_summary(result: EvalResult) -> str:
     """Human-readable one-line summary."""
-    if not result.correctness:
+    if result.outcome != EvalOutcome.OK:
+        prefix = result.outcome.value.upper()
         if result.error:
-            return f"FAILED: {result.error}"
-        return f"CORRECTNESS FAILED (metrics: {result.metrics})"
-    parts = ["correctness: PASS"]
+            return f"{prefix}: {result.error}"
+        return f"{prefix} (metrics: {result.metrics})"
+    parts = ["outcome: OK"]
     for key, val in result.metrics.items():
         if isinstance(val, float):
             parts.append(f"{key}: {val:.4f}")

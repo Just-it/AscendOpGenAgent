@@ -1,12 +1,17 @@
-"""Output comparison: torch.allclose-style standard.
+"""Output comparison: torch.allclose-style standard, dict-returning API.
 
-Canonical implementation lives at
-`skills/triton/kernel-verifier/scripts/verify.py` on `main`; this
-module ports its `_check_accuracy_allclose` verbatim. Used by:
-  - the static eval_kernel.py verify phase (one subprocess per round)
-  - the batch-time pre-flight verify.py Tier 2 check
+Single source for the per-pair allclose math:
+    skills/triton/kernel-verifier/scripts/verify.py
+        — get_allclose_tolerance(), compare(), _check_accuracy_allclose()
 
-Algorithm:
+This module wraps skill verify.compare() (which raises AssertionError on
+failure) with a dict-returning multi-case API that batch/verify.py
+consumes (it needs per-case status + max_abs_diff to render
+verify_results.json — info skill's raise-on-failure surface doesn't
+provide).
+
+Algorithm (lives entirely in skill verify.py; reproduced here only as a
+narrative for readers — any implementation drift is a bug):
   1. NaN positions in ref vs kernel must match exactly.
   2. Inf positions and signs must match exactly.
   3. bool tensors must compare exactly.
@@ -24,43 +29,64 @@ Per-dtype tolerances (rtol = 2^n, atol = absolute floor):
 """
 from __future__ import annotations
 
-
-_DEFAULT_TOL = {"rtol": 2 ** -13, "atol": 1e-5}
-
-
-def get_allclose_tolerance(data_type) -> dict:
-    """Per-dtype (rtol, atol) for torch.allclose-style comparison.
-
-    Mirrors `skills/triton/kernel-verifier/scripts/verify.py` on `main`.
-    Accepts either a torch.dtype or a lowercase dtype string. Unknown
-    dtypes fall back to fp32 tolerance.
-    """
-    import torch
-
-    if isinstance(data_type, str):
-        key = data_type.lower().replace("torch.", "")
-        return {
-            "float32":  {"rtol": 2 ** -13, "atol": 1e-5},
-            "float":    {"rtol": 2 ** -13, "atol": 1e-5},
-            "float16":  {"rtol": 2 ** -10, "atol": 1e-3},
-            "half":     {"rtol": 2 ** -10, "atol": 1e-3},
-            "bfloat16": {"rtol": 2 ** -7,  "atol": 1e-2},
-        }.get(key, _DEFAULT_TOL)
-
-    return {
-        torch.float32:  {"rtol": 2 ** -13, "atol": 1e-5},
-        torch.float16:  {"rtol": 2 ** -10, "atol": 1e-3},
-        torch.bfloat16: {"rtol": 2 ** -7,  "atol": 1e-2},
-    }.get(data_type, _DEFAULT_TOL)
+import importlib.util
+import os
+import sys
 
 
-def _check_one_tensor(ref, new, idx: int, diagnostics: list) -> tuple[bool, float | None]:
+# ---------------------------------------------------------------------------
+# Skill loader: import skill verify.py once at module load. Loading via
+# importlib.util keeps the generic basename `verify` from colliding with
+# `.autoresearch/scripts/batch/verify.py` if both end up on sys.path.
+# ---------------------------------------------------------------------------
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+# .../utils -> .../scripts -> .../.autoresearch -> repo root
+_REPO_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
+_SKILL_VERIFY_PATH = os.path.join(
+    _REPO_ROOT, "skills", "triton", "kernel-verifier", "scripts", "verify.py",
+)
+
+
+def _load_skill_verify():
+    if not os.path.isfile(_SKILL_VERIFY_PATH):
+        raise RuntimeError(
+            f"kernel-verifier skill not found at {_SKILL_VERIFY_PATH!r} — "
+            f"utils.correctness wraps its compare() helper. Layout assumption: "
+            f"skills/ is a sibling of .autoresearch/."
+        )
+    spec = importlib.util.spec_from_file_location(
+        "_skill_verify_for_correctness", _SKILL_VERIFY_PATH)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_skill = _load_skill_verify()
+
+# Re-export the per-dtype tolerance lookup so callers that previously did
+# `from utils.correctness import get_allclose_tolerance` still resolve.
+get_allclose_tolerance = _skill.get_allclose_tolerance
+
+
+# ---------------------------------------------------------------------------
+# Per-tensor comparison: thin wrapper over skill verify.compare()
+# ---------------------------------------------------------------------------
+
+def _check_one_tensor(ref, new, idx: int, diagnostics: list) -> tuple:
     """torch.allclose-style check on a single (ref, new) tensor pair.
 
     Returns (passed, max_abs_diff_or_None). Appends one diagnostic line.
-    Mirrors `compare()` + `_check_accuracy_allclose()` from `main`'s
-    verify.py - same NaN/Inf handling, same bool short-circuit, same
-    `|diff| <= atol + rtol * |ref|` element-wise gate.
+
+    Implementation: delegates the pass/fail decision to skill verify.compare()
+    so the allclose math + NaN / Inf / bool / int rules live in exactly one
+    place. We only add the bits skill compare() doesn't surface:
+      - explicit dtype-mismatch shortcut (skill compare auto-coerces; utils
+        callers expect a hard fail with a clean diagnostic)
+      - max_abs_diff for both pass and fail (batch/verify.py reports it)
+      - dict-friendly diagnostic line (skill raises a multi-line metrics
+        block on failure; we trim to the first line for the per-pair feed).
     """
     import torch
 
@@ -72,107 +98,54 @@ def _check_one_tensor(ref, new, idx: int, diagnostics: list) -> tuple[bool, floa
 
     rf = ref.detach().cpu().flatten()
     nf = new.detach().cpu().flatten()
-
     if rf.shape != nf.shape:
         diagnostics.append(
             f"out{idx}: shape mismatch ref={tuple(rf.shape)} new={tuple(nf.shape)}"
         )
         return False, None
 
-    rf_nan = torch.isnan(rf)
-    nf_nan = torch.isnan(nf)
-    if not torch.equal(rf_nan, nf_nan):
-        diagnostics.append(
-            f"out{idx}: NaN position mismatch ref={int(rf_nan.sum())}"
-            f" new={int(nf_nan.sum())} of {rf.numel()}"
-        )
-        return False, None
-
-    rf_inf = torch.isinf(rf)
-    nf_inf = torch.isinf(nf)
-    if not torch.equal(rf_inf, nf_inf):
-        diagnostics.append(
-            f"out{idx}: Inf position mismatch ref={int(rf_inf.sum())}"
-            f" new={int(nf_inf.sum())} of {rf.numel()}"
-        )
-        return False, None
-    if rf_inf.any() and not torch.equal(
-        torch.sign(rf[rf_inf]), torch.sign(nf[nf_inf])
-    ):
-        diagnostics.append(f"out{idx}: Inf sign mismatch")
-        return False, None
-
+    # Pre-compute max_abs on the finite floating portion. We do this BEFORE
+    # delegating because skill compare() doesn't return max_abs on success
+    # (and on failure raises a string; parsing that back is fragile). For
+    # bool / int / all-non-finite cases we follow the legacy convention
+    # below: 0.0 for exact-comparison dtypes, None when there's nothing
+    # finite to measure.
     finite = torch.isfinite(rf) & torch.isfinite(nf)
-    if int(finite.sum()) == 0:
-        diagnostics.append(f"out{idx}: OK (all non-finite, skipped)")
-        return True, None
-
     rf_fin = rf[finite]
     nf_fin = nf[finite]
+    if int(finite.sum()) == 0:
+        max_abs = None
+    elif rf_fin.dtype == torch.bool or not rf_fin.is_floating_point():
+        max_abs = 0.0
+    else:
+        max_abs = float((nf_fin.float() - rf_fin.float()).abs().max().item())
 
-    if rf_fin.dtype == torch.bool:
-        if not torch.equal(rf_fin, nf_fin):
-            n_bad = int((rf_fin != nf_fin).sum())
-            diagnostics.append(
-                f"out{idx}: bool mismatch {n_bad}/{int(rf_fin.numel())}"
-            )
-            return False, None
+    try:
+        _skill.compare(ref, new, ref.dtype)
+    except AssertionError as e:
+        first_line = str(e).split("\n", 1)[0]
+        diagnostics.append(f"out{idx}: {first_line}")
+        return False, max_abs
+
+    if max_abs is None:
+        diagnostics.append(f"out{idx}: OK (all non-finite, skipped)")
+    elif rf_fin.dtype == torch.bool:
         diagnostics.append(f"out{idx}: OK (bool exact)")
-        return True, 0.0
-
-    if not rf_fin.is_floating_point():
-        if not torch.equal(rf_fin, nf_fin):
-            n_bad = int((rf_fin != nf_fin).sum())
-            diagnostics.append(
-                f"out{idx}: int mismatch {n_bad}/{int(rf_fin.numel())} dtype={rf_fin.dtype}"
-            )
-            return False, None
+    elif not rf_fin.is_floating_point():
         diagnostics.append(f"out{idx}: OK (int exact dtype={rf_fin.dtype})")
-        return True, 0.0
-
-    tol = get_allclose_tolerance(rf_fin.dtype)
-    rtol = tol["rtol"]
-    atol = tol["atol"]
-    rf_f = rf_fin.float()
-    nf_f = nf_fin.float()
-    diff = (nf_f - rf_f).abs()
-    max_abs = float(diff.max().item())
-    allowed = atol + rtol * rf_f.abs()
-    max_allowed = float(allowed.max().item())
-    close = diff <= allowed
-    passed = bool(close.all().item())
-
-    if passed:
+    else:
         diagnostics.append(
-            f"out{idx}: OK (max_abs_err={max_abs:.3e} "
-            f"max_allowed={max_allowed:.3e} rtol={rtol:.3e} "
-            f"atol={atol:.3e} dtype={rf_fin.dtype})"
+            f"out{idx}: OK (max_abs_err={max_abs:.3e} dtype={rf_fin.dtype})"
         )
-        return True, max_abs
+    return True, max_abs
 
-    n_bad = int((~close).sum())
-    diagnostics.append(
-        f"out{idx}: max_abs_err={max_abs:.3e} "
-        f"max_allowed={max_allowed:.3e} rtol={rtol:.3e} "
-        f"atol={atol:.3e} dtype={rf_fin.dtype} "
-        f"bad_elems={n_bad}/{int(rf_fin.numel())}"
-    )
-    return False, max_abs
 
+# ---------------------------------------------------------------------------
+# Single-case wrapper
+# ---------------------------------------------------------------------------
 
 def compare_outputs(out_ref: list, out_new: list) -> dict:
     """allclose-style comparison for a single shape case.
-
-    Tolerances are derived from the reference dtype via
-    `get_allclose_tolerance()`.
-
-    Behavior:
-      - Output count mismatch: hard fail.
-      - Empty output lists on both sides: hard fail (wrapper bug).
-      - Non-tensor outputs require same type and `==`.
-      - For each tensor pair, NaN/Inf position equality + bool/int exact +
-        floating `|diff| <= atol + rtol*|ref|` element-wise gate per
-        `_check_one_tensor`.
 
     Returns:
       {"correctness": bool,
@@ -181,7 +154,7 @@ def compare_outputs(out_ref: list, out_new: list) -> dict:
     """
     import torch
 
-    diagnostics: list[str] = []
+    diagnostics: list = []
 
     if len(out_ref) != len(out_new):
         return {
@@ -200,7 +173,7 @@ def compare_outputs(out_ref: list, out_new: list) -> dict:
         }
 
     all_pass = True
-    max_abs_overall: float | None = None
+    max_abs_overall = None
 
     for i, (r, n) in enumerate(zip(out_ref, out_new)):
         if not (isinstance(r, torch.Tensor) and isinstance(n, torch.Tensor)):
@@ -236,14 +209,19 @@ def compare_outputs(out_ref: list, out_new: list) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Multi-case wrapper (the API batch/verify.py imports)
+# ---------------------------------------------------------------------------
+
 def compare_outputs_per_case(out_ref_per_case: list,
                              out_new_per_case: list) -> dict:
     """Multi-shape allclose-style check: hard-gate on every case.
 
     Inputs are List[List[Tensor]] - one outer entry per shape case, each
     inner list is the model's outputs for that case (already moved to CPU
-    by the caller). Returns:
+    by the caller).
 
+    Returns:
       {"correctness": bool,                # AND of every case
        "per_case": [
            {"idx": int, "correctness": bool, "diagnostics": [...],
@@ -255,10 +233,7 @@ def compare_outputs_per_case(out_ref_per_case: list,
        "worst_idx": int | None,
        "worst_max_abs_diff": float | None}
 
-    Both single- and multi-shape callers go through this wrapper - the
-    static `eval_kernel.py` (verify phase) and the batch Tier-2 verify
-    (`batch/verify.py`) call it unconditionally, with single-shape
-    inputs collapsed to `List[List[Tensor]]` of length 1.
+    Single-shape callers collapse to `List[List[Tensor]]` of length 1.
     """
     if len(out_ref_per_case) != len(out_new_per_case):
         return {
@@ -275,9 +250,9 @@ def compare_outputs_per_case(out_ref_per_case: list,
         }
 
     per_case = []
-    flat_diag: list[str] = []
+    flat_diag: list = []
     all_pass = True
-    max_abs_overall: float | None = None
+    max_abs_overall = None
 
     for i, (out_ref, out_new) in enumerate(zip(out_ref_per_case,
                                                out_new_per_case)):
@@ -297,8 +272,8 @@ def compare_outputs_per_case(out_ref_per_case: list,
             max_abs_overall = m
 
     failed_indices = [pc["idx"] for pc in per_case if not pc["correctness"]]
-    worst_idx: int | None = None
-    worst_max: float | None = None
+    worst_idx = None
+    worst_max = None
     if not all_pass:
         candidates = [pc for pc in per_case
                       if not pc["correctness"]

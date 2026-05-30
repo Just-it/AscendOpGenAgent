@@ -1,10 +1,20 @@
 """Local subprocess driver for autoresearch eval.
 
-Runs the static `eval_kernel.py` once per round (one subprocess does
-verify + profile_gen + optional profile_base in sequence — the triton
-JIT cache populated during verify is then warm for profile_gen).
-Replaced an earlier "materialize verify_<op>.py / profile_<op>_*.py
-under <task_dir>/.ar_eval/ then run each separately" flow.
+Runs the static `eval_kernel.py` per round. Two subprocesses are
+launched in sequence so a kernel-induced SIGKILL / device hang in the
+second cannot prevent ref measurement from landing on disk:
+
+  1. ref subprocess  — phases=profile_base (loads ref only)
+  2. kernel subprocess — phases=verify,profile_gen (loads ref + kernel;
+     triton JIT cache populated by verify is warm for profile_gen)
+
+When the caller supplies a sticky `override_base_time_us`, step 1 is
+skipped (ref doesn't need re-measuring round-to-round). Earlier the
+two passes lived in ONE subprocess (verify → profile_gen →
+profile_base); a kernel UB overflow or device fault during verify /
+profile_gen would kill the process before profile_base ran, leaving
+`baseline_metric=None` permanently — that's the failure mode this
+split fixes.
 
 Public surface:
   - detect_local_backend() -> (ok, why)
@@ -159,81 +169,138 @@ def _avg_us(d: Optional[dict]) -> Optional[float]:
 
 
 # ---------------------------------------------------------------------------
-# Combined verify + profile (single subprocess)
+# Verify + profile (two subprocesses: ref first, then kernel)
 # ---------------------------------------------------------------------------
+
+def _read_sidecar(path: str) -> dict:
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f) or {}
+    except Exception as e:
+        logger.warning("eval_runner: cannot parse %s: %s", path, e)
+        return {}
+
 
 def local_eval(task_dir: str, op_name: str,
                kernel_file: str, ref_file: str,
                timeout: int, device_id: int = 0,
                warmup: int = 10, repeats: int = 100,
                override_base_time_us: Optional[float] = None,
+               override_base_per_shape_us: Optional[list] = None,
                ) -> tuple[dict, dict]:
-    """Run eval_kernel.py once with verify + profile_gen (+ profile_base
-    when no sticky baseline is supplied). Returns
-    (verify_resp, profile_resp) in the shape `_assemble_eval_result`
-    expects, so eval_client doesn't have to know how phases are
-    packaged.
+    """Run eval_kernel.py in two passes (see module docstring):
+      ref pass:    --phases profile_base
+      kernel pass: --phases verify,profile_gen
+    Then merge per-phase sidecars and assemble (verify_resp,
+    profile_resp) in the shape `_assemble_eval_result` consumes.
+
+    When `override_base_time_us` is supplied (sticky baseline), the
+    ref pass is skipped — ref doesn't need re-measuring round-to-round.
+
+    override_base_per_shape_us: when provided alongside the aggregate,
+    profile_resp gets a synthesized base profile artifact that includes
+    per_shape entries — keeps speedup_vs_ref aggregation (geomean of
+    per-shape ratios) consistent across sticky-baseline rounds and the
+    initial round that actually measured ref.
     """
     skip_base = (override_base_time_us is not None
                  and override_base_time_us > 0
                  and override_base_time_us < float("inf"))
-    phases = ["verify", "profile_gen"] + ([] if skip_base else ["profile_base"])
 
-    scripts_dir = os.path.dirname(os.path.abspath(__file__))
-    eval_script = os.path.join(scripts_dir, "eval_kernel.py")
-    # CANN's C runtime writes "[Warning]: tiling struct ..." to stdout
-    # without trailing newlines, which would concatenate onto our JSON
-    # if we tried to parse stdout. Use a sidecar file instead.
-    out_path = os.path.join(os.path.abspath(task_dir), ".eval_result.json")
-    cmd = [
-        sys.executable, eval_script,
-        "--task-dir", os.path.abspath(task_dir),
-        "--op-name", op_name,
-        "--kernel-file", kernel_file,
-        "--ref-file", ref_file,
-        "--device-id", str(device_id),
-        "--warmup", str(warmup),
-        "--repeats", str(repeats),
-        "--phases", ",".join(phases),
-        "--output", out_path,
-    ]
-
-    # Always wipe a stale result file before launch — if the subprocess
-    # crashes before writing, we want a missing file rather than the
-    # previous round's data masquerading as this round's.
-    try:
-        os.remove(out_path)
-    except FileNotFoundError:
-        pass
-
+    # __file__ is scripts/utils/eval_runner.py — climb one level then
+    # dive into engine/ where eval_kernel.py lives post-restructure.
+    scripts_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    eval_script = os.path.join(scripts_dir, "engine", "eval_kernel.py")
+    abs_task = os.path.abspath(task_dir)
     env = _build_env(device_id)
-    rc, stdout, stderr = _run_subprocess(cmd, cwd=task_dir, env=env,
-                                          timeout=timeout)
-    log_combined = (stdout + ("\n" + stderr if stderr else "")).strip()
 
-    payload: dict = {}
-    if os.path.isfile(out_path):
+    # Distinct sidecars per pass so the second pass can't overwrite the
+    # first. Both files persist under task_dir for forensics; downstream
+    # code reads from in-memory verify_resp / profile_resp, not the
+    # files.
+    ref_path = os.path.join(abs_task, ".eval_result_ref.json")
+    kernel_path = os.path.join(abs_task, ".eval_result_kernel.json")
+    for p in (ref_path, kernel_path):
         try:
-            with open(out_path, "r", encoding="utf-8") as f:
-                payload = json.load(f)
-        except Exception as e:
-            logger.warning("eval_runner: cannot parse %s: %s", out_path, e)
+            os.remove(p)
+        except FileNotFoundError:
+            pass
 
-    verify_block = payload.get("verify")
-    base_block = payload.get("profile_base")
-    gen_block = payload.get("profile_gen")
+    def _run_phases(phases: list[str], out_path: str) -> tuple[int, str]:
+        cmd = [
+            sys.executable, eval_script,
+            "--task-dir", abs_task,
+            "--op-name", op_name,
+            "--kernel-file", kernel_file,
+            "--ref-file", ref_file,
+            "--device-id", str(device_id),
+            "--warmup", str(warmup),
+            "--repeats", str(repeats),
+            "--phases", ",".join(phases),
+            "--output", out_path,
+        ]
+        rc, stdout, stderr = _run_subprocess(
+            cmd, cwd=task_dir, env=env, timeout=timeout)
+        log = (stdout + ("\n" + stderr if stderr else "")).strip()
+        return rc, log
+
+    # --- Pass 1: ref-only subprocess (immune to kernel-induced death) ----
+    if skip_base:
+        ref_log = ""
+        ref_payload: dict = {}
+    else:
+        _, ref_log = _run_phases(["profile_base"], ref_path)
+        ref_payload = _read_sidecar(ref_path)
+
+    # --- Pass 2: kernel subprocess (verify + profile_gen, JIT warm) -------
+    # rc here is the kernel-side returncode — the one downstream readers
+    # treat as authoritative (verify_resp.returncode). A ref crash
+    # surfaces via verify_resp.error_source == "ref" / missing base_time.
+    rc, kernel_log = _run_phases(["verify", "profile_gen"], kernel_path)
+    kernel_payload = _read_sidecar(kernel_path)
+
+    log_combined = "\n".join(s for s in (ref_log, kernel_log) if s).strip()
+    verify_block = kernel_payload.get("verify")
+    gen_block = kernel_payload.get("profile_gen")
+    base_block = ref_payload.get("profile_base") if not skip_base else None
 
     verify_correct = (isinstance(verify_block, dict)
                       and bool(verify_block.get("correctness")))
+    # error_source: "ref" | "kernel" | None. run_verify tags it on the
+    # verify_block; eval_client reads it via verify_resp to decide
+    # ref-broken vs kernel-broken (drives INFRA_FAIL vs KERNEL_FAIL).
+    error_source = (verify_block.get("error_source")
+                    if isinstance(verify_block, dict) else None)
     verify_resp = {
         "success": verify_correct,
         "log": log_combined,
         "artifacts": {},
         "returncode": rc,
+        "error_source": error_source,
+        # Pass the full verify_block through so eval_client can pull
+        # failed_indices / per_case / diagnostics for DIAGNOSE context
+        # without re-parsing the log JSON tail (eval_kernel writes its
+        # structured result to .eval_result.json, not to stderr).
+        "verify_block": verify_block if isinstance(verify_block, dict) else {},
     }
 
     artifacts: dict[str, str] = {}
-    if isinstance(base_block, dict):
+    if skip_base and isinstance(override_base_per_shape_us, list) and override_base_per_shape_us:
+        # Materialise a base profile artifact from the sticky per-shape
+        # baseline so _assemble_eval_result sees per_base alongside
+        # per_gen — speedup_vs_ref then computes as geomean of per-shape
+        # ratios just like the round-0 baseline did.
+        synth_per_shape = [{"avg_time_us": float(v)}
+                           for v in override_base_per_shape_us]
+        synth_avg = sum(s["avg_time_us"] for s in synth_per_shape) / len(synth_per_shape)
+        artifacts["base_profile_result.json"] = json.dumps({
+            "avg_time_us": synth_avg,
+            "per_shape": synth_per_shape,
+            "sticky": True,
+        })
+    elif isinstance(base_block, dict):
         artifacts["base_profile_result.json"] = json.dumps(base_block)
     if isinstance(gen_block, dict):
         artifacts["generation_profile_result.json"] = json.dumps(gen_block)

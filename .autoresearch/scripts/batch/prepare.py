@@ -15,9 +15,7 @@ monitor, summarize) involves user decisions and stays as separate
 commands.
 
 Usage:
-    python .autoresearch/scripts/batch/prepare.py <batch_dir> --mode ref-kernel
     python .autoresearch/scripts/batch/prepare.py <batch_dir>
-        # re-run after adding/removing files; inherits mode from manifest
 
 Flags mirror discover.py (filter / exclude / dirs) and verify.py (only).
 Exits 0 only if both steps pass; on discover failure verify is skipped.
@@ -34,13 +32,57 @@ import manifest as mf
 import verify
 
 
+def _preflight_check_hook_paths() -> int:
+    """Verify every `.autoresearch/scripts/...py` referenced by
+    `.claude/settings.json` hook commands actually exists. Returns 0 on
+    pass, prints a re-sync hint and returns 1 on stale paths.
+
+    A common breakage is `mv setups/autoresearch/* .claude/` was done
+    before a refactor that renamed hook scripts — the activated
+    settings.json then references stale paths, all hooks silently fail,
+    and Claude has no AR guidance when the batch later runs.
+    """
+    import json
+    import re
+    repo_root = Path(__file__).resolve().parents[3]
+    settings_path = repo_root / ".claude" / "settings.json"
+    if not settings_path.is_file():
+        return 0  # no activated settings → nothing to check
+    try:
+        settings = json.loads(settings_path.read_text())
+    except Exception as e:
+        print(f"[preflight] cannot parse {settings_path}: {e}",
+              file=sys.stderr)
+        return 1
+
+    pattern = re.compile(r"\.autoresearch/scripts/[\w/]+\.py")
+    missing: list[tuple[str, str]] = []
+    for phase, entries in (settings.get("hooks") or {}).items():
+        for entry in entries:
+            for hook in entry.get("hooks") or []:
+                for rel in pattern.findall(hook.get("command", "")):
+                    if not (repo_root / rel).is_file():
+                        missing.append((phase, rel))
+
+    if missing:
+        print(f"[preflight] {settings_path} references missing hook scripts:",
+              file=sys.stderr)
+        for phase, rel in missing:
+            print(f"    {phase}: {rel}", file=sys.stderr)
+        print("\nLikely cause: setups/autoresearch/ was activated (mv'd) "
+              "before a refactor renamed hook scripts. Re-sync:",
+              file=sys.stderr)
+        print("  cp setups/autoresearch/settings.json .claude/settings.json",
+              file=sys.stderr)
+        return 1
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Prepare a batch dir: discover ops + verify Tier 1.",
     )
     ap.add_argument("batch_dir")
-    ap.add_argument("--mode", choices=mf.VALID_MODES,
-                    help="ref-kernel or ref (overrides existing manifest)")
     ap.add_argument("--ref-dir", default="",
                     help="ref subdirectory (default: from manifest, else 'refs')")
     ap.add_argument("--kernel-dir", default="",
@@ -60,6 +102,12 @@ def main() -> int:
     if not batch_dir.is_dir():
         sys.exit(f"batch dir not found: {batch_dir}")
 
+    # ---- Step 0: preflight (hook paths) ----------------------------------
+    # Catch stale `.claude/settings.json` hook references before spending
+    # minutes on discover + Tier 1 verify. Cheap (just file existence).
+    if _preflight_check_hook_paths() != 0:
+        return 1
+
     # ---- Step 1: discover -------------------------------------------------
     print(f"[prepare 1/2] discover  batch_dir={batch_dir}")
 
@@ -70,18 +118,11 @@ def main() -> int:
     except mf.ManifestError:
         pass
 
-    mode = args.mode or existing.get("mode")
-    if not mode:
-        sys.exit("--mode required (no existing manifest to inherit from)")
-    if mode not in mf.VALID_MODES:
-        sys.exit(f"--mode must be one of {mf.VALID_MODES}, got {mode!r}")
-
     ref_dir = args.ref_dir or existing.get("ref_dir") or "refs"
     kernel_dir = args.kernel_dir or existing.get("kernel_dir") or "kernels"
-    kernel_dir_for_scan = kernel_dir if mode == "ref-kernel" else None
 
     ops = discover.discover(
-        batch_dir, mode, ref_dir, kernel_dir_for_scan,
+        batch_dir, ref_dir, kernel_dir,
         include_glob=args.filter or None,
         exclude_globs=list(args.exclude),
     )
@@ -90,11 +131,7 @@ def main() -> int:
                  "<op_name>_ref.py / <op_name>_kernel.py in the configured "
                  "ref_dir / kernel_dir.")
 
-    target = discover.write_manifest(
-        batch_dir, mode, ref_dir,
-        kernel_dir if mode == "ref-kernel" else None,
-        ops,
-    )
+    target = discover.write_manifest(batch_dir, ref_dir, kernel_dir, ops)
     print(f"  wrote {len(ops)} ops to {target.name}")
     for op in ops:
         print(f"  - {op}")
@@ -106,7 +143,7 @@ def main() -> int:
     # ---- Step 2: verify Tier 1 -------------------------------------------
     print(f"\n[prepare 2/2] verify Tier 1")
     rc = verify.run_verification(
-        batch_dir, mode=mode, full=False, only=args.only,
+        batch_dir, full=False, only=args.only,
     )
     if rc == 0:
         print("\n[prepare] all checks passed; batch dir is ready to run.")

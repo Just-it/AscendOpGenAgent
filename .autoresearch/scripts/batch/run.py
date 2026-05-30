@@ -6,9 +6,8 @@ op end-to-end via headless `claude --print`. Streams stdout to console and
 batch.log, updates batch_progress.json after every op.
 
 Usage:
-    python .autoresearch/scripts/batch/run.py <batch_dir> \\
-        --mode {ref-kernel,ref} --devices N \\
-        [--max-rounds 30] [--eval-timeout 120] [--timeout-min 180] \\
+    python .autoresearch/scripts/batch/run.py <batch_dir> --devices N \\
+        [--max-rounds 30] [--eval-timeout 600] [--timeout-min 180] \\
         [--only op1,op2] [--limit N] [--retry-errored] [--cooldown-sec 5]
 """
 from __future__ import annotations
@@ -36,7 +35,7 @@ os.environ.setdefault("PYTHONUNBUFFERED", "1")
 
 
 PROMPT_TEMPLATE = """\
-/autoresearch --ref {ref}{kernel_arg} --op-name {op} {hw} --max-rounds {rounds} --eval-timeout {timeout}
+/autoresearch --ref {ref} --kernel {kernel} --op-name {op} {hw} --max-rounds {rounds} --eval-timeout {timeout}
 
 CRITICAL rules — read carefully, this session is non-interactive:
 
@@ -49,7 +48,14 @@ CRITICAL rules — read carefully, this session is non-interactive:
    chain — every PostToolUse gate keys off that file. THIS IS THE
    SINGLE MOST IMPORTANT STEP.
 
-2. {mode_block}
+2. The kernel.py we passed via --kernel is a verified seed. Scaffold's
+   --run-baseline runs it; on PASS .ar_state/.phase is set to PLAN
+   immediately. Your job is PERFORMANCE OPTIMIZATION via
+   PLAN -> EDIT -> VERIFY for the configured max-rounds: propose
+   targeted incremental edits to ModelNew (block sizes, memory layout,
+   vectorization, fewer DRAM round-trips) and let pipeline.py measure
+   the speedup. If baseline fails on the seed, the hook routes to PLAN
+   and the first plan items must fix/rewrite the seed kernel.
 
 3. In EDIT phase use the Edit tool (or Write for full rewrites).
    PostToolUse validates kernel.py and auto-advances on pass.
@@ -67,26 +73,6 @@ CRITICAL rules — read carefully, this session is non-interactive:
    the hooks have nothing more to ask of you, the session ends
    naturally on your last tool call.
 """
-
-MODE_BLOCK = {
-    "ref-kernel": (
-        "The kernel.py we passed via --kernel is a verified seed. "
-        "Scaffold's --run-baseline runs it; on PASS .ar_state/.phase is "
-        "set to PLAN immediately, skipping GENERATE_KERNEL. Your job is "
-        "PERFORMANCE OPTIMIZATION via PLAN -> EDIT -> VERIFY for the "
-        "configured max-rounds: propose targeted incremental edits to "
-        "ModelNew (block sizes, memory layout, vectorization, fewer DRAM "
-        "round-trips) and let pipeline.py measure the speedup. If "
-        "baseline unexpectedly fails, the hook demotes to "
-        "GENERATE_KERNEL; recover with the smallest diff against the "
-        "seed that fixes the regression."
-    ),
-    "ref": (
-        "Only the reference is supplied. Scaffold runs GENERATE_KERNEL "
-        "first; produce a working kernel.py that passes baseline, then "
-        "optimize via PLAN -> EDIT -> VERIFY for the remaining rounds."
-    ),
-}
 
 LOCK_FILENAME = ".batch.lock"
 
@@ -163,21 +149,18 @@ def recover_stale_running(progress: dict) -> int:
     return n
 
 
-def build_prompt(case: dict, mode: str, hw_arg: str,
+def build_prompt(case: dict, hw_arg: str,
                  max_rounds: int, eval_timeout: int) -> str:
     """Quote every value-bearing flag with shlex.quote so paths with
     spaces (e.g. batch dir under `C:\\Users\\Foo Bar\\...`, or
     `--output-dir "my tasks"`) reach /autoresearch as one argv each."""
-    kernel_arg = (f" --kernel {shlex.quote(case['kernel'])}"
-                  if case.get("kernel") else "")
     return PROMPT_TEMPLATE.format(
         ref=shlex.quote(case["ref"]),
-        kernel_arg=kernel_arg,
+        kernel=shlex.quote(case["kernel"]),
         op=shlex.quote(case["op_name"]),
         hw=hw_arg,
         rounds=max_rounds,
         timeout=eval_timeout,
-        mode_block=MODE_BLOCK[mode],
     )
 
 
@@ -204,11 +187,11 @@ def env_with_no_proxy() -> dict[str, str]:
     return env
 
 
-def run_one(batch_dir: Path, case: dict, args: argparse.Namespace,
-            mode: str, hw_arg: str, log_fp) -> int:
+def run_one(batch_dir: Path, case: dict,
+            args: argparse.Namespace, hw_arg: str, log_fp) -> int:
     op = case["op_name"]
     repo_root = mf.repo_root()
-    prompt = build_prompt(case, mode, hw_arg,
+    prompt = build_prompt(case, hw_arg,
                           args.max_rounds, args.eval_timeout)
     cmd = build_claude_cmd(args, prompt)
 
@@ -222,6 +205,17 @@ def run_one(batch_dir: Path, case: dict, args: argparse.Namespace,
                    final_phase=None,
                    rc=None,
                    note="")
+
+    # Identity-bound task_dir from same-Popen scaffold markers; snapshot
+    # is the post-process safety net only.
+    pre_task_dirs = mf.snapshot_task_dirs()
+    bound_task_dir: Path | None = None
+
+    # Clear stale .active_task left by a prior op / batch / interactive
+    # session. The activation hook reads this file on claude startup and
+    # silently resumes the pointed task, bypassing /autoresearch's
+    # scaffold dispatch. Reset so parse_args -> scaffold is the only entry.
+    (repo_root / ".autoresearch" / ".active_task").unlink(missing_ok=True)
 
     header = (f"\n{'=' * 72}\n"
               f"[run {datetime.now().isoformat(timespec='seconds')}] op={op} "
@@ -283,13 +277,23 @@ def run_one(batch_dir: Path, case: dict, args: argparse.Namespace,
                     proc.kill()
                     break
                 if reader_done.is_set() and line_q.empty():
-                    # Reader saw EOF and queue is fully drained.
                     break
                 continue
             sys.stdout.write(line)
             sys.stdout.flush()
             log_fp.write(line)
             log_fp.flush()
+            if bound_task_dir is None:
+                td = (mf.parse_scaffold_created_line(line)
+                      or mf.parse_scaffold_result_line(line))
+                # Reject paths claude might echo from prior context: must
+                # be fresh AND a scaffold-formatted dir for THIS op (exact
+                # match, not prefix — `op=avg` must not claim avg_pool2d_*).
+                if (td is not None
+                        and td not in pre_task_dirs
+                        and mf.task_dir_belongs_to_op(td.name, op)):
+                    bound_task_dir = td
+                    mf.update_case(batch_dir, op, task_dir=str(td.resolve()))
         proc.wait(timeout=30)
     except KeyboardInterrupt:
         interrupted = True
@@ -308,11 +312,8 @@ def run_one(batch_dir: Path, case: dict, args: argparse.Namespace,
     log_fp.write(footer)
     log_fp.flush()
 
-    # Authoritative task discovery: scan ar_tasks/ for the freshest dir
-    # matching this op. There is no in-band marker — the model is forbidden
-    # from self-declaring "done"/"stuck" (any such instruction would let an
-    # early-stop heuristic creep back in). Truth lives in .ar_state/.phase.
-    td = mf.find_recent_task_dir(op, since_ts=started - 5)
+    # Final pick: stdout-bound dir wins; snapshot diff is the safety net.
+    td = bound_task_dir or mf.pick_new_task_dir(pre_task_dirs, op)
     if td is None:
         mf.update_case(batch_dir, op,
                        status="error",
@@ -445,12 +446,10 @@ def print_summary(batch_dir: Path, total_elapsed: float,
 def main() -> int:
     ap = argparse.ArgumentParser(description="Batch driver for /autoresearch.")
     ap.add_argument("batch_dir", help="dir containing manifest.yaml/json")
-    ap.add_argument("--mode", choices=mf.VALID_MODES,
-                    help="ref-kernel or ref (overrides manifest.mode)")
     ap.add_argument("--devices", default="",
                     help="NPU device ids, e.g. 0 or 0,1 (required)")
     ap.add_argument("--max-rounds", type=int, default=30)
-    ap.add_argument("--eval-timeout", type=int, default=120,
+    ap.add_argument("--eval-timeout", type=int, default=600,
                     help="per-shape verify/profile budget in seconds. The "
                          "eval call is capped at eval_timeout * num_cases "
                          "(num_cases comes from get_input_groups() / get_inputs()). "
@@ -484,11 +483,9 @@ def main() -> int:
     except mf.ManifestError as e:
         sys.exit(f"failed to load {manifest_path}: {e}")
 
-    mode = args.mode or manifest_data.get("mode")
-    if not mode:
-        sys.exit("--mode is required (also accepted as `mode:` in manifest)")
-    if mode not in mf.VALID_MODES:
-        sys.exit(f"--mode must be one of {mf.VALID_MODES}, got {mode!r}")
+    # ref-kernel is the only supported mode now. Ignore stale manifest.mode
+    # values for backward compatibility instead of erroring out.
+    mode = "ref-kernel"
 
     if not args.devices:
         sys.exit("--devices is required (local-only eval)")
@@ -522,7 +519,7 @@ def main() -> int:
             queue = queue[: args.limit]
 
         print(f"[batch {datetime.now().isoformat(timespec='seconds')}] "
-              f"batch_dir={batch_dir}  mode={mode}  {hw_arg}\n"
+              f"batch_dir={batch_dir}  {hw_arg}\n"
               f"[batch] queue size: {len(queue)}  rounds={args.max_rounds}")
 
         log_path = batch_dir / mf.LOG_FILENAME
@@ -544,7 +541,7 @@ def main() -> int:
                       f"elapsed_total={(time.time()-total_started)/60:.1f}min")
 
                 try:
-                    rc = run_one(batch_dir, case, args, mode, hw_arg, log_fp)
+                    rc = run_one(batch_dir, case, args, hw_arg, log_fp)
                 except KeyboardInterrupt:
                     print("\n[batch] Ctrl-C — current op recorded, stopping.")
                     rc_final = 130

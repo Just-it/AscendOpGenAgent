@@ -1,9 +1,10 @@
 """workflow/ — orchestration layer between hooks and state_store.
 
-Modules added incrementally; first one is `transition` (PhaseController),
-which owns every .ar_state/.phase write. Subsequent steps will move
-plan/round/baseline orchestration logic out of pipeline.py / hook_*.py
-and into siblings here.
+Owns the rules that turn "what just happened" into "next phase" and the
+record_round / run_baseline_init bodies. Both are called in-process by
+engine/pipeline.py and engine/baseline.py respectively; the previous
+shell wrappers (keep_or_discard.py, _baseline_init.py) have been
+deleted now that no caller crosses a subprocess boundary.
 """
 from .transition import PhaseController
 from .planning import PlanStore

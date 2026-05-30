@@ -226,6 +226,7 @@ mv setups/autoresearch/settings.json .claude/settings.json
 mv setups/autoresearch/agents .claude/agents
 mv setups/autoresearch/commands .claude/commands
 ```
+> **⚠️ 配置激活后如果 `git pull` 拉到 `setups/autoresearch/` 的更新（例如 hook 脚本路径改了），需要重新执行上面的 mv 操作（先把 `.claude/` 下的旧文件删掉/移走，再 mv 一次）。**
 
 2. 进入 AscendOpGenAgent 目录，启动 claude：
 ```bash
@@ -238,7 +239,7 @@ claude
   --op-name <op> --devices 5 --max-rounds 30
 ```
 
-无人值守长跑可用 `/loop /autoresearch --resume` 自动续跑。完整入门、批量跑、断点续跑、阶段机不变量等见 **[docs/AUTORESEARCH.md](docs/AUTORESEARCH.md)**。
+完整入门、批量跑、断点续跑、阶段机不变量等见 **[docs/AUTORESEARCH.md](docs/AUTORESEARCH.md)**。
 
 ---
 

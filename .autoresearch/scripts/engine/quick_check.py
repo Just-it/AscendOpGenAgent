@@ -18,7 +18,7 @@ this rewrite; it toggles the static check itself, not any specific
 implementation.
 
 Usage:
-    python .autoresearch/scripts/quick_check.py <task_dir>
+    python .autoresearch/scripts/engine/quick_check.py <task_dir>
 
 Output:
     stdout: 'OK' on pass, JSON error blob on fail
@@ -30,9 +30,9 @@ import os
 import subprocess
 import sys
 
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from task_config import load_task_config
-from validate_triton_impl import validate as validate_triton_impl
+from utils.validate_triton_impl import validate as validate_triton_impl
 
 
 def _format_regression_report(result: dict) -> str:

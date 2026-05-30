@@ -16,7 +16,7 @@ between the user and the LLM closes that drift.
 
 Modes:
   resume     — `--resume [task_dir]` or a bare existing task path
-  scaffold   — init flags (--ref/--desc + --op-name + --devices)
+  scaffold   — init flags (--ref + --kernel + --op-name + --devices)
   ask        — empty args, or scaffold flags incomplete
 
 Output (single JSON line on stdout):
@@ -34,6 +34,10 @@ import os
 import shlex
 import sys
 
+# scaffold.py lives at scripts/ root (one level up from engine/) — make it
+# importable so the lazy `from scaffold import _make_arg_parser` resolves.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 
 def _emit(payload: dict) -> None:
     print(json.dumps(payload, ensure_ascii=False))
@@ -49,12 +53,8 @@ def _build_scaffold_command(args) -> str:
     or whitespace quirks in the user's typed string.
     """
     parts = ["python", ".autoresearch/scripts/scaffold.py"]
-    if args.ref:
-        parts += ["--ref", shlex.quote(args.ref)]
-    if args.desc:
-        parts += ["--desc", shlex.quote(args.desc)]
-    if args.kernel:
-        parts += ["--kernel", shlex.quote(args.kernel)]
+    parts += ["--ref", shlex.quote(args.ref)]
+    parts += ["--kernel", shlex.quote(args.kernel)]
     if args.op_name:
         parts += ["--op-name", shlex.quote(args.op_name)]
     if args.devices:
@@ -78,7 +78,8 @@ def main():
             "command": None,
             "values": {},
             "missing": [
-                "--ref <file> or --desc \"...\"",
+                "--ref <file>",
+                "--kernel <file>",
                 "--op-name <name>",
                 "--devices <N>",
                 "--max-rounds (optional, default 20)",
@@ -146,19 +147,17 @@ def main():
             "missing": [f"argparse rejected the args: {e.msg}"],
         })
 
-    # Workflow-level required fields. argparse already enforces --ref XOR
-    # --desc; the rest we check here so the LLM gets a single error list.
+    # Workflow-level required fields. argparse already enforces --ref and
+    # --kernel as required positionals; the rest we check here so the LLM
+    # gets a single error list.
     missing = []
-    if not args.op_name and not args.desc:
-        # op_name is auto-derivable from --desc inside scaffold but not
-        # from --ref alone — explicitly require it whenever --ref is used.
+    if not args.op_name:
         missing.append("--op-name <name>")
     if not args.devices:
         missing.append("--devices <N>")
 
     values = {
         "ref": args.ref,
-        "desc": args.desc,
         "kernel": args.kernel,
         "op_name": args.op_name,
         "devices": args.devices,

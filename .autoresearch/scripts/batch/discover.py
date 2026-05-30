@@ -6,8 +6,7 @@ Usage:
     python .autoresearch/scripts/batch/discover.py <batch_dir>
 
     # Bootstrap a fresh manifest from filesystem state (when no manifest exists):
-    python .autoresearch/scripts/batch/discover.py <batch_dir> \\
-        --mode ref-kernel --write-manifest
+    python .autoresearch/scripts/batch/discover.py <batch_dir> --write-manifest
 
     # Refresh the ops list of an existing manifest after adding/removing files:
     python .autoresearch/scripts/batch/discover.py <batch_dir> --write-manifest
@@ -16,11 +15,9 @@ Usage:
     python .autoresearch/scripts/batch/discover.py <batch_dir> \\
         --filter "*norm" --exclude "groupnorm"
 
-Pairing rules:
-    --mode ref-kernel : op is included only if BOTH <ref_dir>/<op>_ref.py and
-                        <kernel_dir>/<op>_kernel.py exist; unpaired files are
-                        printed as warnings on stderr.
-    --mode ref        : op only needs <ref_dir>/<op>_ref.py.
+Pairing rule: an op is included only if BOTH <ref_dir>/<op>_ref.py and
+<kernel_dir>/<op>_kernel.py exist; unpaired files are printed as
+warnings on stderr.
 """
 from __future__ import annotations
 
@@ -47,31 +44,27 @@ def _scan_dir(dir_path: Path, suffix: str) -> set[str]:
     return out
 
 
-def discover(batch_dir: Path, mode: str, ref_dir: str, kernel_dir: str | None,
+def discover(batch_dir: Path, ref_dir: str, kernel_dir: str,
              include_glob: str | None, exclude_globs: list[str]) -> list[str]:
     ref_path = (batch_dir / ref_dir).resolve()
     ref_ops = _scan_dir(ref_path, "_ref")
 
-    if mode == "ref-kernel":
-        assert kernel_dir is not None
-        kern_path = (batch_dir / kernel_dir).resolve()
-        kern_ops = _scan_dir(kern_path, "_kernel")
+    kern_path = (batch_dir / kernel_dir).resolve()
+    kern_ops = _scan_dir(kern_path, "_kernel")
 
-        only_ref = ref_ops - kern_ops
-        only_kern = kern_ops - ref_ops
-        if only_ref:
-            print(f"warning: {len(only_ref)} ops have ref but no kernel: "
-                  f"{', '.join(sorted(only_ref)[:5])}"
-                  f"{', ...' if len(only_ref) > 5 else ''}",
-                  file=sys.stderr)
-        if only_kern:
-            print(f"warning: {len(only_kern)} ops have kernel but no ref: "
-                  f"{', '.join(sorted(only_kern)[:5])}"
-                  f"{', ...' if len(only_kern) > 5 else ''}",
-                  file=sys.stderr)
-        ops = ref_ops & kern_ops
-    else:
-        ops = ref_ops
+    only_ref = ref_ops - kern_ops
+    only_kern = kern_ops - ref_ops
+    if only_ref:
+        print(f"warning: {len(only_ref)} ops have ref but no kernel: "
+              f"{', '.join(sorted(only_ref)[:5])}"
+              f"{', ...' if len(only_ref) > 5 else ''}",
+              file=sys.stderr)
+    if only_kern:
+        print(f"warning: {len(only_kern)} ops have kernel but no ref: "
+              f"{', '.join(sorted(only_kern)[:5])}"
+              f"{', ...' if len(only_kern) > 5 else ''}",
+              file=sys.stderr)
+    ops = ref_ops & kern_ops
 
     if include_glob:
         ops = {op for op in ops if fnmatch.fnmatch(op, include_glob)}
@@ -89,12 +82,12 @@ def _has_pyyaml() -> bool:
         return False
 
 
-def write_manifest(batch_dir: Path, mode: str, ref_dir: str,
-                   kernel_dir: str | None, ops: list[str]) -> Path:
+def write_manifest(batch_dir: Path, ref_dir: str,
+                   kernel_dir: str, ops: list[str]) -> Path:
     """Create or update <batch_dir>/manifest.{yaml,json}.
 
-    Preserves any extra fields already present in the file. Only mode/
-    ref_dir/kernel_dir/ops are written from this call.
+    Preserves any extra fields already present in the file. Only
+    mode/ref_dir/kernel_dir/ops are written from this call.
     """
     yaml_path = batch_dir / "manifest.yaml"
     json_path = batch_dir / "manifest.json"
@@ -113,10 +106,9 @@ def write_manifest(batch_dir: Path, mode: str, ref_dir: str,
         except mf.ManifestError as e:
             sys.exit(f"existing {target.name} unreadable: {e}")
 
-    existing["mode"] = mode
+    existing["mode"] = "ref-kernel"
     existing["ref_dir"] = ref_dir
-    if mode == "ref-kernel":
-        existing["kernel_dir"] = kernel_dir
+    existing["kernel_dir"] = kernel_dir
     existing["ops"] = ops
 
     if target.suffix in (".yaml", ".yml"):
@@ -140,8 +132,6 @@ def main() -> int:
         description="Auto-discover ops by <op>_ref.py / <op>_kernel.py convention."
     )
     ap.add_argument("batch_dir")
-    ap.add_argument("--mode", choices=mf.VALID_MODES,
-                    help="ref-kernel or ref (overrides existing manifest)")
     ap.add_argument("--ref-dir", default="",
                     help="ref subdirectory (default: from manifest, else 'refs')")
     ap.add_argument("--kernel-dir", default="",
@@ -169,21 +159,11 @@ def main() -> int:
     except mf.ManifestError:
         pass
 
-    mode = args.mode or existing.get("mode")
-    if not mode:
-        sys.exit("--mode required (no existing manifest to inherit from)")
-    if mode not in mf.VALID_MODES:
-        sys.exit(f"--mode must be one of {mf.VALID_MODES}, got {mode!r}")
-
     ref_dir = args.ref_dir or existing.get("ref_dir") or "refs"
     kernel_dir = args.kernel_dir or existing.get("kernel_dir") or "kernels"
-    if mode == "ref":
-        kernel_dir_for_scan = None
-    else:
-        kernel_dir_for_scan = kernel_dir
 
     ops = discover(
-        batch_dir, mode, ref_dir, kernel_dir_for_scan,
+        batch_dir, ref_dir, kernel_dir,
         include_glob=args.filter or None,
         exclude_globs=list(args.exclude),
     )
@@ -193,9 +173,7 @@ def main() -> int:
                  "ref_dir / kernel_dir.")
 
     if args.write_manifest:
-        target = write_manifest(batch_dir, mode, ref_dir,
-                                kernel_dir if mode == "ref-kernel" else None,
-                                ops)
+        target = write_manifest(batch_dir, ref_dir, kernel_dir, ops)
         print(f"wrote {len(ops)} ops to {target.name}")
         for op in ops:
             print(f"  - {op}")

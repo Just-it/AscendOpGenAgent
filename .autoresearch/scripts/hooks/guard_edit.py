@@ -5,20 +5,24 @@ PreToolUse hook for Edit/Write — thin dispatcher.
 Per-phase allow/block for file targets lives in phase_machine.check_edit.
 This hook handles two concerns check_edit can't express as a pure function:
 
-  1. Files outside the task dir are always allowed (out of scope).
+  1. Files outside the active task dir are rejected. The agent's job is to
+     optimise the kernel inside <task_dir>; touching the source workspace/
+     files, repo configs, or any other path outside the task is out of
+     scope and was previously a silent footgun (e.g., the agent "fixing"
+     a workspace/<op>_ref.py the user shared with git / CI).
   2. EDIT-phase dirty-tree gate — needs live git state, not just phase.
 """
 import os
 import subprocess
 import sys
 
-sys.path.insert(0, os.path.dirname(__file__))
-from hook_utils import (read_hook_input, block_decision, block_with_guidance,
-                        extract_target_path)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from hooks.utils import (read_hook_input, block_decision, block_with_guidance,
+                         extract_target_path)
 from phase_machine import (
     read_phase, get_task_dir, touch_heartbeat,
     edit_marker_path, check_edit, EDIT, DIAGNOSE,
-    diagnose_state,
+    diagnose_state, pending_settle_path,
 )
 
 
@@ -60,10 +64,9 @@ def _edit_phase_git_gate(task_dir: str, editable_files):
 
     Note on the message wording: "uncommitted changes from previous round"
     used to be the only diagnosis here, but the same gate also fires when
-    GENERATE_REF / GENERATE_KERNEL had a seed commit failure (now caught
-    earlier — phase holds at GENERATE_*) or when something off-flow edited
-    an editable file. Keep the message neutral so the LLM doesn't latch
-    onto "previous round" as the only possible cause.
+    something off-flow edited an editable file. Keep the message neutral
+    so the LLM doesn't latch onto "previous round" as the only possible
+    cause.
     """
     try:
         repo_root = subprocess.run(
@@ -93,7 +96,7 @@ def _edit_phase_git_gate(task_dir: str, editable_files):
                 f"a seed commit that didn't land or an off-flow edit. "
                 f"Run pipeline.py to settle the current diff into a round "
                 f"before editing more: "
-                f"python .autoresearch/scripts/pipeline.py \"{task_dir}\""
+                f"python .autoresearch/scripts/engine/pipeline.py \"{task_dir}\""
             )
 
     # Start-of-round marker so re-editing the same file doesn't re-fire this gate
@@ -121,20 +124,37 @@ def main():
 
     rel = _rel_to_task(file_path, task_dir)
     if rel is None:
-        sys.exit(0)  # file outside task_dir — not our concern
+        # Out-of-scope edit. Block instead of allowing — agent should only
+        # touch files inside the active task_dir. Most common offender:
+        # editing the source workspace/<op>_ref.py the user passed via
+        # --ref. scaffold has already copied it into task_dir, so any
+        # legitimate "fix the ref" decision belongs to a fresh /autoresearch
+        # invocation by the user, not a side-effect of the current task.
+        block_with_guidance(
+            task_dir,
+            f"Edit target {file_path!r} is outside the active task "
+            f"directory ({task_dir}). The agent's scope is the task_dir "
+            f"only — source files in workspace/, repo configs, hooks, "
+            f"and anything else outside are off-limits. If you need to "
+            f"change a source --ref or --kernel file, exit the task and "
+            f"re-run /autoresearch with the corrected source."
+        )
 
     from task_config import load_task_config
     config = load_task_config(task_dir)
     editable_files = list(config.editable_files) if config else []
 
     phase = read_phase(task_dir)
-    # plan_items.xml in DIAGNOSE is gated on the three-state action;
-    # compute it here so check_edit can apply that rule. Outside DIAGNOSE
-    # the action is irrelevant — pass None (gate stays open).
+    # plan_items.xml in DIAGNOSE is gated on the three-state action; in
+    # EDIT it's gated on pending-settle recovery. Compute both so
+    # check_edit can apply the rules.
     diag_action = (diagnose_state(task_dir).action
                    if phase == DIAGNOSE else None)
+    pending = (phase == EDIT
+               and os.path.isfile(pending_settle_path(task_dir)))
     ok, reason = check_edit(phase, rel, editable_files,
-                            diagnose_action=diag_action)
+                            diagnose_action=diag_action,
+                            pending_settle=pending)
     if not ok:
         block_with_guidance(task_dir, reason)
 

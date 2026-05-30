@@ -1,29 +1,33 @@
 #!/usr/bin/env python3
 """Mechanical plan.md settlement — no LLM needed.
 
-After keep_or_discard.py runs, this script:
-1. Reads the decision (KEEP/DISCARD/FAIL) from keep_or_discard output
+After `workflow.record_round` (called in-process by pipeline.py) runs,
+this script:
+1. Reads the decision (KEEP/DISCARD/FAIL) from record_round's return dict
 2. Updates plan.md via PlanStore.settle_active (mark active item [x],
    advance ACTIVE marker, append Settled History row)
-3. Returns the next phase (computed by PhaseController.on_round_settled
-   - keep using `compute_next_phase` here on its own to avoid double-
-   writing .phase; pipeline.py is responsible for the actual phase
-   write via PhaseController in the post-settle path)
 
 Usage:
     python settle.py <task_dir> <decision_json>
 
 Output (stdout, last line):
-    {"next_phase": "EDIT", "settled_item": "p1", "decision": "KEEP",
-     "metric": 1294.8}
+    {"settled_item": "p1", "decision": "KEEP", "metric": 1294.8}
+
+Scope note: settle.py does NOT advance .ar_state/.phase, and does not
+predict the next phase in its output either. The phase transition after
+a settled round is owned by pipeline.py's `_post_settle` (via
+PhaseController.on_round_settled). The earlier `next_phase` field was a
+forecast emitted from a second copy of the rule (compute_next_phase
+called here, then re-called by PhaseController), and no caller actually
+read it — pipeline.py recomputes the transition itself. Keep the rule
+on the pipeline side; settle owns plan.md only.
 """
 import json
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from workflow import PlanStore
-from phase_machine import compute_next_phase
 
 
 def main():
@@ -64,7 +68,6 @@ def main():
         "settled_item": settled_id,
         "decision": decision,
         "metric": metric_val,
-        "next_phase": compute_next_phase(task_dir),
     }))
 
 

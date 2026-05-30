@@ -1,16 +1,18 @@
-"""Reference / kernel / plan validators + plan.md parser.
+"""Kernel / plan validators + plan.md parser.
 
 Validators (each: "is this artifact OK enough to advance the phase?"):
 
-  - is_placeholder_file: does kernel.py / reference.py still contain the
-    scaffold-time placeholder text? (placeholder constants live here too.)
-  - validate_reference: AST symbols + CPU import-and-run check on
-    reference.py.
-  - validate_kernel: placeholder fast-path + Triton regression check
-    (delegates to validate_triton_impl.validate via quick_check).
+  - validate_kernel: Triton regression check (delegates to
+    validate_triton_impl.validate via quick_check).
   - validate_plan: structural check on plan.md (≥3 items, rationale length,
     exactly one ACTIVE).
   - validate_diagnose: marker + sections on diagnose_v<N>.md.
+
+Reference runnability is no longer validated here. The AST symbol check
+lives in [utils/ref_ast.py](../utils/ref_ast.py) and is called once by
+scaffold up front; reference runtime behaviour is validated by
+scaffold's `--run-baseline` (run_verify in eval_kernel.py tags
+`error_source="ref"` on ref-side failure).
 
 Plan.md parsing (`parse_plan_text`, `get_plan_items`, `has_pending_items`,
 `get_active_item`, `is_settled_table_header`) is the single source of
@@ -19,200 +21,38 @@ create_plan.py all consume it from here.
 """
 import os
 import re
-import subprocess
 import sys
 from typing import NamedTuple, Optional
 
 # Sibling-module imports inside the package: state_store gives us paths,
-# phase constants, and the JSON-tail parser used to interpret the
-# subprocess output of validate_reference.
-from .state_store import (
-    plan_path, parse_last_json_line,
+# phase constants, etc. The subprocess JSON-tail parser is the shared
+# utility in utils.json_io (used to be duplicated here and in
+# task_config.eval_client).
+import os as _os
+import sys as _sys
+_scripts_dir = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _scripts_dir not in _sys.path:
+    _sys.path.insert(0, _scripts_dir)
+from utils.json_io import parse_last_json_line  # noqa: E402
+from .state_store import (  # noqa: E402
+    plan_path,
     diagnose_artifact_path, diagnose_marker,
     load_progress, DIAGNOSE_ATTEMPTS_CAP,
 )
 
 
 # ---------------------------------------------------------------------------
-# Placeholder detection
-# ---------------------------------------------------------------------------
-
-# Scaffold writes this when --kernel is omitted, so the placeholder is
-# distinguishable from a real seed kernel. The matching predicate
-# (`is_placeholder_file()` below) keeps the rule in lockstep.
-KERNEL_PLACEHOLDER = (
-    "# TODO: GENERATE_KERNEL phase will fill this in.\n"
-    "# Read reference.py and write an initial seed kernel.\n"
-    "# Must define class ModelNew (may inherit from Model).\n"
-)
-
-# In --desc mode, scaffold writes reference.py as a parametric stub:
-#   "# TODO: Claude Code will generate reference from description:\n# <desc>\n"
-# We can't exact-match it (the description is per-task), so the predicate
-# uses this prefix instead.
-REFERENCE_PLACEHOLDER_PREFIX = (
-    "# TODO: Claude Code will generate reference from description:"
-)
-
-
-def is_placeholder_file(path: str) -> bool:
-    """True iff `path` is missing OR matches one of the scaffold placeholders.
-
-    Single source of truth used by hook_post_edit, hook_post_bash._fresh_start,
-    and validate_kernel. Update this rule and the placeholder templates
-    (`KERNEL_PLACEHOLDER`, `REFERENCE_PLACEHOLDER_PREFIX`) together.
-
-    Earlier versions used a "contains 'TODO' AND length < 200" heuristic,
-    which false-positived a legitimate short seed kernel that happened to
-    carry a TODO comment (e.g. `# TODO: tune block size later`) and trapped
-    GENERATE_KERNEL forever. We now match against the canonical templates:
-      - kernel.py: byte-for-byte match against KERNEL_PLACEHOLDER (fixed text)
-      - reference.py: prefix match against REFERENCE_PLACEHOLDER_PREFIX
-        (parametric — description text is appended per task)
-    Anything Claude has actually written deviates and is no longer a stub.
-    """
-    if not os.path.exists(path):
-        return True
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
-    except OSError:
-        return True
-    stripped = content.strip()
-    if stripped == KERNEL_PLACEHOLDER.strip():
-        return True
-    if stripped.startswith(REFERENCE_PLACEHOLDER_PREFIX):
-        return True
-    return False
-
-
-# ---------------------------------------------------------------------------
-# Reference runnability check
-# ---------------------------------------------------------------------------
-
-# Subprocess template for running reference.py end-to-end on CPU. We only
-# care that import + Model(*get_init_inputs())(*get_inputs()) survives;
-# outputs are discarded — verify_<op>.py recomputes them on every round.
-_REF_RUNCHECK_SCRIPT = r'''
-import json, os, sys, traceback
-sys.path.insert(0, {task_dir!r})
-sys.path.insert(0, {scripts_dir!r})
-try:
-    import torch
-    import {ref_mod} as _ref
-    from {ref_mod} import Model, get_init_inputs
-    from input_groups import resolve as _resolve_groups
-except Exception as e:
-    traceback.print_exc()
-    print(json.dumps({{"ok": False, "stage": "import", "error": str(e)}}))
-    sys.exit(1)
-try:
-    init_inputs = get_init_inputs()
-    groups = _resolve_groups(_ref)
-    if not groups:
-        print(json.dumps({{"ok": False, "stage": "input",
-                           "error": "input groups list is empty"}}))
-        sys.exit(1)
-    # Run forward on the first case only — validators are about
-    # importability + a single survival run, not full eval.
-    model = Model(*init_inputs).cpu().eval()
-    inputs = [x.cpu() if hasattr(x, "cpu") else x for x in groups[0]]
-    with torch.no_grad():
-        outs = model(*inputs)
-    if outs is None:
-        print(json.dumps({{"ok": False, "stage": "forward",
-                           "error": "Model.forward() returned None"}}))
-        sys.exit(1)
-    print(json.dumps({{"ok": True, "num_cases": len(groups)}}))
-except Exception as e:
-    traceback.print_exc()
-    print(json.dumps({{"ok": False, "stage": "run", "error": str(e)}}))
-    sys.exit(1)
-'''
-
-
-def validate_reference(task_dir: str) -> tuple:
-    """Two-stage runnability check on <task_dir>/reference.py.
-
-    Stage 1: AST symbol presence — delegates to scaffold.validate_ref so the
-             rule lives in exactly one place.
-    Stage 2: Subprocess that imports the module and runs Model.forward() on
-             CPU. CUDA / Ascend devices are masked off; KMP_DUPLICATE_LIB_OK
-             is set for Windows libiomp5 double-load.
-
-    Never raises. Returns (True, "") on success, (False, reason) otherwise.
-    """
-    ref_path = os.path.join(task_dir, "reference.py")
-    if not os.path.exists(ref_path):
-        return False, "reference.py does not exist"
-
-    try:
-        with open(ref_path, "r", encoding="utf-8") as f:
-            ref_code = f.read()
-    except OSError as e:
-        return False, f"cannot read reference.py: {e}"
-
-    # Stage 1: AST symbols. ref_ast.py is a pure-stdlib lib module that
-    # both this validator and scaffold.py consume — phase_machine no
-    # longer reaches into the scaffold CLI script.
-    try:
-        _scripts_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        if _scripts_dir not in sys.path:
-            sys.path.insert(0, _scripts_dir)
-        from ref_ast import validate_ref as _validate_ref_ast
-        _validate_ref_ast(ref_code, ref_path)
-    except ValueError as e:
-        return False, str(e)
-    except Exception as e:
-        return False, f"AST check failed: {e}"
-
-    # Stage 2: subprocess import + forward.
-    _scripts_dir_abs = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    code = _REF_RUNCHECK_SCRIPT.format(task_dir=task_dir,
-                                       scripts_dir=_scripts_dir_abs,
-                                       ref_mod="reference")
-    env = {
-        **os.environ,
-        "CUDA_VISIBLE_DEVICES": "",
-        "ASCEND_RT_VISIBLE_DEVICES": "",
-        "KMP_DUPLICATE_LIB_OK": "TRUE",
-    }
-    try:
-        r = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True, text=True, env=env, cwd=task_dir, timeout=60,
-        )
-    except subprocess.TimeoutExpired:
-        return False, "reference.py runnability check timed out (>60s)"
-    except Exception as e:
-        return False, f"subprocess launch failed: {e}"
-
-    if r.returncode == 0:
-        return True, ""
-
-    # Parse the child's last JSON line for a clean error message; fall back to
-    # the raw stderr tail if the child crashed before printing JSON.
-    info = parse_last_json_line(r.stdout)
-    if info and not info.get("ok", False):
-        stage = info.get("stage", "?")
-        err = info.get("error", "(no detail)")
-        return False, f"reference.py failed at {stage}: {err}"
-    tail = (r.stderr or "")[-400:].strip()
-    return False, f"reference.py runnability check failed: {tail or '(no stderr)'}"
-
-
-# ---------------------------------------------------------------------------
-# Kernel static check (placeholder + Triton regression check)
+# Kernel static check (Triton regression check)
 # ---------------------------------------------------------------------------
 
 def validate_kernel(task_dir: str) -> tuple:
     """Static check on every editable file (typically kernel.py).
 
-    Rejects the TODO placeholder up front, then delegates to
-    quick_check.check_editable_files (the public lib API — same call the
-    quick_check CLI makes). The check runs validate_triton_impl.validate
-    on each editable file to detect Triton regressions
-    (no kernel / kernel unlaunched / PyTorch compute in forward()).
+    Delegates to quick_check.check_editable_files (the public lib API —
+    same call the quick_check CLI makes). The check runs
+    validate_triton_impl.validate on each editable file to detect Triton
+    regressions (no kernel / kernel unlaunched / PyTorch compute in
+    forward()).
 
     Never raises. Returns (True, "") on success, (False, reason) otherwise.
     """
@@ -230,21 +70,13 @@ def validate_kernel(task_dir: str) -> tuple:
     if config is None:
         return False, "task.yaml not found or invalid"
 
-    # Placeholder fast-path: if any editable file is still the scaffold TODO,
-    # the kernel hasn't been generated yet. The regression check would
-    # technically flag a comment-only file as Type 1 anyway, but routing
-    # through this fast-path gives a more specific message ("still the
-    # scaffold TODO placeholder") and holds the phase at GENERATE_KERNEL.
     for fname in config.editable_files:
         fpath = os.path.join(task_dir, fname)
         if not os.path.exists(fpath):
             return False, f"editable file missing: {fname}"
-        if is_placeholder_file(fpath):
-            return False, (f"{fname} is still the scaffold TODO placeholder — "
-                           f"write the seed kernel (must define class ModelNew)")
 
     try:
-        from quick_check import check_editable_files
+        from engine.quick_check import check_editable_files
     except Exception as e:
         return False, f"cannot import quick_check: {e}"
 

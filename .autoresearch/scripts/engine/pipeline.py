@@ -3,12 +3,12 @@
 Post-edit pipeline — runs ALL mechanical steps after Claude Code edits code.
 
 Claude Code does the LLM work (plan, edit, diagnose). Then calls this:
-    python .autoresearch/scripts/pipeline.py <task_dir>
+    python .autoresearch/scripts/engine/pipeline.py <task_dir>
 
 This script does:
     1. quick_check → fail? rollback, report
     2. eval → get metrics
-    3. keep_or_discard → KEEP/DISCARD/FAIL
+    3. record_round → KEEP/DISCARD/FAIL (workflow library, in-process)
     4. settle → update plan.md, advance (ACTIVE)
     5. compute next phase → write .phase
     6. print status + next guidance
@@ -17,20 +17,24 @@ Output: human-readable status to stdout. Claude Code sees it and acts accordingl
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 
-sys.path.insert(0, os.path.dirname(__file__))
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPTS_ROOT = os.path.dirname(SCRIPT_DIR)
+sys.path.insert(0, SCRIPTS_ROOT)
+sys.path.insert(0, SCRIPT_DIR)
 from task_config import load_task_config
-from failure_extractor import format_for_stdout
+from utils.failure_extractor import format_for_stdout
+from utils.json_io import parse_last_json_line
 from workflow import PhaseController, record_round
 from phase_machine import (
     get_active_item,
     get_guidance, auto_rollback, load_progress, edit_marker_path,
-    pending_settle_path, parse_last_json_line, FINISH,
+    pending_settle_path, FINISH,
 )
-
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def _run_settle(task_dir: str, kd_json: dict) -> tuple:
@@ -80,7 +84,7 @@ def _emit_settle_failure(task_dir: str, rc: int, tail_out: str,
           f"progress.json + history.jsonl already moved during this round; "
           f"re-running this script will RETRY SETTLE ONLY (kd_json was "
           f"persisted to .ar_state/.pending_settle.json) — it will NOT "
-          f"re-run quick_check/eval/keep_or_discard.\n"
+          f"re-run quick_check/eval/record_round.\n"
           f"\n"
           f"Recovery options (do NOT hand-edit plan.md):\n"
           f"  1. Fix the underlying cause from the stderr tail below, "
@@ -89,9 +93,9 @@ def _emit_settle_failure(task_dir: str, rc: int, tail_out: str,
           f"  2. If the failure is structural (plan.md malformed, no "
           f"(ACTIVE) item, etc.) and settle cannot recover, run "
           f"create_plan.py to write a fresh plan.md. While "
-          f"pending_settle.json exists, hook_guard_bash allows "
+          f"pending_settle.json exists, hooks/guard_bash allows "
           f"create_plan.py in EDIT phase as a recovery path; on "
-          f"successful create_plan validation hook_post_bash clears "
+          f"successful create_plan validation hooks/post_bash clears "
           f"pending_settle.json. The orphan history.jsonl row stays "
           f"(audit trail) but no longer corresponds to any plan item.\n"
           f"\n"
@@ -156,7 +160,7 @@ def main():
     task_dir = os.path.abspath(sys.argv[1])
 
     # === Replay-only settle ===
-    # If a previous pipeline.py invocation got past keep_or_discard but
+    # If a previous pipeline.py invocation got past record_round but
     # settle.py failed, the kd_json was persisted to .pending_settle.json.
     # Re-running pipeline.py from scratch would re-eval and double-write
     # progress/history; instead, we ONLY retry settle here. Fix the
@@ -176,7 +180,7 @@ def main():
             _clear_pending_settle(task_dir)
             sys.exit(1)
         print(f"[PIPELINE] Retrying settle from {os.path.basename(pending_path)} "
-              f"(skipping quick_check/eval/keep_or_discard).", flush=True)
+              f"(skipping quick_check/eval/record_round).", flush=True)
         rc, tail_out, tail_err, settle_json = _run_settle(task_dir, kd_json)
         if rc != 0:
             _emit_settle_failure(task_dir, rc, tail_out, tail_err)
@@ -241,15 +245,20 @@ def main():
     pipeline_eval_cap = per_shape_budget * max(num_cases, 1) + 300
 
     eval_cmd = [sys.executable, os.path.join(SCRIPT_DIR, "eval_wrapper.py"), task_dir]
+    # Run in a throwaway tmpdir so CANN's unsolicited PROF_* dumps don't
+    # accumulate in the repo.
+    _eval_tmpdir = tempfile.mkdtemp(prefix="ar_eval_")
     try:
         ev = subprocess.run(eval_cmd, capture_output=True, text=True,
-                            timeout=pipeline_eval_cap)
+                            timeout=pipeline_eval_cap, cwd=_eval_tmpdir)
     except subprocess.TimeoutExpired:
         auto_rollback(task_dir)
         print(f"[PIPELINE] EVAL TIMEOUT after {pipeline_eval_cap}s "
               f"({per_shape_budget}s/shape x {num_cases} cases + 300s). "
               f"Rolled back.")
         sys.exit(0)
+    finally:
+        shutil.rmtree(_eval_tmpdir, ignore_errors=True)
 
     eval_json = parse_last_json_line(ev.stdout)
     if eval_json is None:
@@ -260,6 +269,15 @@ def main():
     correctness = eval_json.get("correctness", False)
     metrics = eval_json.get("metrics", {})
     print(f"[PIPELINE] Eval: correctness={correctness}, metrics={metrics}", flush=True)
+
+    # infra_fail: eval pipeline broke before kernel was meaningfully
+    # exercised. Roll back and skip the round — recording a FAIL here
+    # would mislead later DIAGNOSE / KEEP / DISCARD.
+    if eval_json.get("outcome") == "infra_fail":
+        auto_rollback(task_dir)
+        print(f"[PIPELINE] INFRA_FAIL: {eval_json.get('error', 'no data')}. "
+              f"Rolled back, not recording round.", flush=True)
+        sys.exit(0)
 
     # Surface structured failure signals (UB overflow, aivec trap, OOM, ...)
     # extracted from the eval subprocess's raw log. Without this, Claude
@@ -281,10 +299,10 @@ def main():
             print(eval_json["raw_output_tail"], flush=True)
 
     # === Step 3: Keep or discard ===
-    # Direct library call (was a subprocess + last-line-JSON parse). Same
-    # workflow.record_round body that `keep_or_discard.py` shells to;
-    # in-process eliminates the JSON-protocol seam between pipeline and
-    # the round writer.
+    # Direct library call (was a subprocess + last-line-JSON parse before
+    # the deleted keep_or_discard.py shell wrapper was removed). In-process
+    # eliminates the JSON-protocol seam between pipeline and the round
+    # writer.
     kd_json = record_round(task_dir, eval_json,
                            description=desc, plan_item=plan_item)
     if kd_json.get("decision") == "ERROR":
@@ -294,7 +312,7 @@ def main():
     decision = kd_json.get("decision", "FAIL")
 
     # === Step 4: Settle (update plan.md) ===
-    # progress.json + history.jsonl were already mutated by keep_or_discard;
+    # progress.json + history.jsonl were already mutated by record_round;
     # plan.md is the only state piece settle.py owns. If settle fails, the
     # kd_json is persisted to .pending_settle.json so the NEXT invocation
     # of pipeline.py retries settle alone (no second eval, no duplicate

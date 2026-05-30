@@ -7,25 +7,19 @@ external deps beyond Python + PyYAML.
 ## Quick Start
 
 ```bash
-# 1. Open this project in Claude Code
-cd claude-autoresearch
-claude
+# Drop sources into workspace/<op_name>_ref.py and workspace/<op_name>_kernel.py,
+# then start a task. --devices is required.
+/autoresearch --ref workspace/<op_name>_ref.py --kernel workspace/<op_name>_kernel.py \
+              --op-name <op_name> --devices 0
 
-# 2. Drop sources into workspace/<op_name>_ref.py (and optional _kernel.py),
-#    then start a task. --devices is required.
-/autoresearch --ref workspace/<op_name>_ref.py --op-name <op_name> --devices 0
-
-# 3. Resume later
+# Resume later
 /autoresearch --resume
 
-# 4. Monitor in a separate terminal
+# Monitor in a separate terminal
 python .autoresearch/scripts/dashboard.py <task_dir> --watch
 ```
 
-`/autoresearch` is the only slash command — full operational details in
-[.claude/commands/autoresearch.md](.claude/commands/autoresearch.md).
-
-For unattended long runs, wrap in self-paced loop: `/loop /autoresearch --resume`.
+Full operational details in [.claude/commands/autoresearch.md](.claude/commands/autoresearch.md).
 
 ## Skills Library
 
@@ -41,26 +35,26 @@ filename in plan rationales.
 
 ## Invariants (hook-driven flow)
 
-Hooks emit `[AR Phase: ...]` messages on stderr after every state-changing
-event. Follow the latest one. Don't try to fetch guidance manually —
-`phase_machine` is a Python package used by hooks, not a CLI;
-`hook_guard_bash` rejects direct invocation.
-
-The following invariants are non-negotiable:
-
-1. **`.ar_state/plan.md` is the source of truth.** Only `create_plan.py` /
-   `settle.py` / `pipeline.py` write it. Never hand-edit. TodoWrite is a
-   UI mirror, not a substitute.
+1. **`.ar_state/plan.md` is the source of truth.** Only `create_plan.py`
+   and `settle.py` write it (both via `workflow.PlanStore`). Never
+   hand-edit. TodoWrite is a UI mirror, not a substitute.
 2. **Plan IDs are globally monotonic.** `p1, p2, ...` from
    `progress.json.next_pid`. Never reuse, never skip.
 3. **Every `pN` either settles (KEEP / DISCARD / FAIL in `history.jsonl`)
-   or is dropped at a REPLAN/DIAGNOSE boundary.** `create_plan.py` does
-   not synthesize DISCARD rows for superseded items — they're silently
-   dropped; the pid counter still advances.
-4. **Phase transitions are hook-controlled.** Never write
-   `.ar_state/.phase` manually. Wait for the hook's guidance.
+   or is silently dropped at a REPLAN/DIAGNOSE boundary** — pid counter
+   still advances, no synthetic DISCARD row written.
+4. **Phase transitions are owned by `workflow.PhaseController`.** Never
+   write `.ar_state/.phase` manually. The hook (`hooks/post_bash.py`)
+   triggers the controller after activation and after `create_plan.py`
+   validates; the engine scripts (`workflow.run_baseline_init` inside
+   `engine/baseline.py`, `_post_settle` inside `engine/pipeline.py`)
+   trigger it after baseline / round settlement. Either way every
+   write goes through `PhaseController.on_*`. Listen to the
+   `[AR Phase: ...]` messages on stderr; don't poke `phase_machine`
+   directly (it's a library, not a CLI — `hooks/guard_bash.py` rejects
+   direct invocation).
 5. **Editable files are scoped by `task.yaml.editable_files`.** Editing
-   anything else is rejected by `hook_guard_edit.py`.
+   anything else is rejected by `hooks/guard_edit.py`.
 6. **After a session break, resume with `/autoresearch --resume`.** Do
    not patch state files to recover.
 7. **`create_plan.py` rejects mean the plan has a real problem**
@@ -69,18 +63,23 @@ The following invariants are non-negotiable:
 8. **TodoWrite sync is mandatory.** When a hook emits `additionalContext`
    with a TodoWrite payload, call TodoWrite with it verbatim next turn.
 9. **AR scripts run as direct top-level Bash invocations only.**
-   To *invoke* an AR script the command must be a single foreground
-   call: `python .autoresearch/scripts/<name>.py <task_dir> [args...]`
-   (env-var prefixes, Python flags, and FD redirection like `> log
-   2>&1` are fine). Wrappers (`nohup`, `bash -lc`, `sh -c`, subshells,
-   `$(...)`), chains (`&&`, `||`, `;`, `|`), and backgrounding (`&`)
-   are unsupported and rejected by `hook_guard_bash`. Run multiple
-   AR scripts as separate Bash tool calls.
+   To *invoke* a blessed CLI the command must be a single foreground
+   call: `python .autoresearch/scripts/engine/<name>.py <task_dir>
+   [args...]` (pipeline, baseline, create_plan, eval_wrapper,
+   quick_check, settle, parse_args). The top-level lifecycle scripts
+   use the flat path:
+   `python .autoresearch/scripts/<name>.py` (scaffold, resume,
+   dashboard). Env-var prefixes, Python flags, and FD redirection
+   (`> log 2>&1`) are fine. Wrappers (`nohup`, `bash -lc`, `sh -c`,
+   subshells, `$(...)`), chains (`&&`, `||`, `;`, `|`), and
+   backgrounding (`&`) are unsupported and rejected by
+   `hooks/guard_bash.py`. Run multiple AR scripts as separate Bash
+   tool calls.
 
-   *Reading* AR scripts (e.g. `cat .autoresearch/scripts/X.py`,
-   `git diff -- .autoresearch/scripts/X.py`) is allowed because the
-   classifier sees those heads as read-only and the args don't
-   execute. The Read tool is still preferred — it's the idiomatic
+   *Reading* AR scripts (e.g. `cat .autoresearch/scripts/engine/pipeline.py`,
+   `git diff -- .autoresearch/scripts/engine/settle.py`) is allowed
+   because the classifier sees those heads as read-only and the args
+   don't execute. The Read tool is still preferred — it's the idiomatic
    way to inspect file contents in Claude Code.
 10. **DIAGNOSE phase ends with a new plan.** Two paths to that end:
    - **Preferred (subagent route).** Call `Task(subagent_type='ar-diagnosis')`;
@@ -98,15 +97,19 @@ The following invariants are non-negotiable:
 
    While the artifact is invalid AND attempts < cap, Bash is locked to
    read-only / lifecycle ops (no AR scripts beyond `create_plan.py`,
-   which is itself gated on artifact validity). Stop is blocked the
-   entire time DIAGNOSE is active — only `create_plan.py` advancing
-   phase to EDIT releases the lock.
+   which is itself gated on artifact validity).
 
    Provenance note: hook payloads do NOT distinguish main agent from
    subagent, so the host validates the artifact's CONTENT only — not who
    wrote it. The subagent path is preferred because the prompt and
    read-only-by-default tool isolation produce a more reliable diagnosis,
    not because the host can prove the subagent wrote the file.
+
+11. **Stop is only legal at phase FINISH.** `hooks/stop_save.py` blocks
+    early Stop in every other phase; the block message embeds
+    `get_guidance(task_dir)` so the agent sees the next action.
+    `max_rounds` + auto-DIAGNOSE-on-3-fails are the budget. If stuck,
+    go through DIAGNOSE (#10), not Stop.
 
 ## Dependencies
 

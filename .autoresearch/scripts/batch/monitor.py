@@ -252,9 +252,15 @@ def main() -> int:
         if args.task_dir:
             td = Path(args.task_dir).resolve()
         else:
-            td = mf.find_active_task_dir()
+            # Pull the running case's task_dir from THIS batch's
+            # progress.json — not the repo-wide active pointer, which
+            # could belong to a sibling batch or a manual session
+            # sharing `ar_tasks/`.
+            td = mf.find_running_case_task_dir(batch_dir)
             if td is None:
-                sys.exit("no task found in ar_tasks/")
+                sys.exit("no running case has a bound task_dir yet "
+                         "(scaffolding, or batch already finished). "
+                         "Pass --task-dir <path> to attach explicitly.")
         if not DASHBOARD_PY.exists():
             sys.exit(f"dashboard.py not found at {DASHBOARD_PY}")
         print(f"[monitor] launching autoresearch dashboard on {td}")
@@ -271,7 +277,11 @@ def main() -> int:
 
     def render_once() -> str:
         progress = mf.load_progress(batch_dir)
-        active_dir = mf.find_active_task_dir()
+        # Scope active state to THIS batch's running case (or None while
+        # it's still scaffolding). Earlier the monitor read the repo-wide
+        # active-task pointer, which would project a sibling batch's
+        # state into this batch's UI when both ran concurrently.
+        active_dir = mf.find_running_case_task_dir(batch_dir)
         active = task_state(active_dir) if active_dir else None
         log_tail = tail_lines(log_path, n=6)
         return render(batch_dir, progress, active, log_tail)

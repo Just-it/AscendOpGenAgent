@@ -13,23 +13,19 @@ Layout:
                         static `eval_kernel.py` (one subprocess per
                         round) via `eval_runner.local_eval`.
 
-This `__init__.py` re-exports every public name. New code may prefer
-sub-module imports for readability:
-
-    from task_config.metric_policy import EvalResult, is_improvement
-    from task_config.eval_client    import run_eval
+This `__init__.py` re-exports only the names actually imported from
+outside the package. Submodule-private helpers (operator tables,
+internal result assembly) are not re-laundered through the facade —
+reach into the submodule explicitly when you need them.
 """
 # fmt: off
 from .loader import (
     TaskConfig, load_task_config,
 )
 from .metric_policy import (
-    EvalResult, check_constraints, is_improvement, format_result_summary,
-    # Operator table — internal but referenced by some debug scripts that
-    # introspect supported constraint operators.
-    _CONSTRAINT_OPS,
+    EvalOutcome, EvalResult, check_constraints, is_improvement, format_result_summary,
 )
 from .eval_client import (
-    run_eval, run_local_eval, _assemble_eval_result,
+    run_eval, run_local_eval,
 )
 # fmt: on

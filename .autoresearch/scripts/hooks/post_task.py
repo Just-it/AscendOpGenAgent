@@ -10,7 +10,7 @@ Behavior (driven by `state.action` from `diagnose_state`):
     determines next state:
       * still NEED_DIAGNOSIS → emit retry context (re-issue Task).
       * crossed cap → emit manual-planning context. From here on,
-        hook_guard_task blocks further Task calls and hook_guard_bash's
+        hooks/guard_task blocks further Task calls and hooks/guard_bash's
         DIAGNOSE gate (which checks `state.action == DIAGNOSE_NEED_DIAGNOSIS`)
         no longer blocks create_plan.py, so the main agent can write
         plan_items.xml itself and proceed.
@@ -22,8 +22,8 @@ import json
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(__file__))
-from hook_utils import read_hook_input, emit_status
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from hooks.utils import read_hook_input, emit_status
 from phase_machine import (
     DIAGNOSE, DIAGNOSE_ATTEMPTS_CAP, diagnose_artifact_path,
     diagnose_marker, diagnose_state, get_task_dir, read_phase,
@@ -69,8 +69,8 @@ def _emit_manual_planning_context(task_dir: str, plan_version: int,
 
     Subagent route is exhausted; DIAGNOSE still needs a new plan. The
     artifact gate is dropped (state.action == DIAGNOSE_MANUAL_FALLBACK
-    means hook_guard_bash no longer blocks create_plan.py and
-    hook_guard_task blocks further Task calls). Agent proceeds via the
+    means hooks/guard_bash no longer blocks create_plan.py and
+    hooks/guard_task blocks further Task calls). Agent proceeds via the
     normal PLAN/REPLAN flow: write plan_items.xml from history.jsonl +
     plan.md, then run create_plan.py.
     """

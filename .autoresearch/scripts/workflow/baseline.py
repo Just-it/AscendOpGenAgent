@@ -1,159 +1,102 @@
-"""Round-0 (SEED) eval recorder.
-
-Lifted from `_baseline_init.py` so the body is reusable from other
-entry points (notebook re-runs, future scaffold one-shots) without
-re-invoking the CLI shell. The shell `_baseline_init.py` stays as a
-thin wrapper so existing `python _baseline_init.py <td> <eval_json>`
-call sites keep working.
-
-Exit codes returned by `run_baseline_init`:
-    0  baseline OK (correctness + seed_metric valid; phase -> PLAN)
-    2  seed produced no valid primary metric
-    3  baseline correctness=False
-    1  task.yaml not found / unparseable
-"""
+"""Round-0 SEED eval recorder. `run_baseline_init(task_dir, eval_json)`
+is called in-process by engine/baseline.py and returns that script's
+exit code (see `_EXIT_FOR`). Owns the post-baseline phase transition
+via PhaseController.on_baseline_settled — the post-Bash hook only
+emits guidance off the phase already on disk."""
 from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
-from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from phase_machine import (  # noqa: E402
     Progress, append_history, load_progress, save_progress,
 )
-from task_config import load_task_config  # noqa: E402
+from task_config import EvalOutcome, load_task_config  # noqa: E402
+from utils.git_utils import current_head_short  # noqa: E402
 
+from .progress_reducer import reduce_baseline_init
 from .transition import PhaseController
 
 
-def _valid(v) -> bool:
-    return isinstance(v, (int, float)) and 0 < v < float("inf")
-
-
-def _git_short_head(task_dir: str) -> str:
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=task_dir, capture_output=True, text=True,
-        )
-        return result.stdout.strip() if result.returncode == 0 else "unknown"
-    except Exception:
-        return "unknown"
+# Outcome → exit code. Binary: 0 = task is activatable (kernel may need
+# rewrite via PLAN, but state machine handles that), non-zero = task is
+# NOT activatable. scaffold.py's "rc != 0 → surface error" stays accurate;
+# the slash command's "non-zero exit → stop and report" gates only on
+# INFRA_FAIL now. The full 3-way outcome lives in progress.baseline_outcome
+# for downstream readers (post_bash, dashboard, stop_save).
+_EXIT_FOR = {
+    EvalOutcome.OK: 0,
+    EvalOutcome.KERNEL_FAIL: 0,
+    EvalOutcome.INFRA_FAIL: 4,
+}
 
 
 def run_baseline_init(task_dir: str, eval_json: str) -> int:
-    """Library entry point. CLI shell `_baseline_init.py` calls this with
-    sys.argv[2]. Returns process exit code. Side effects (progress,
-    history, phase) are durable on disk before this returns."""
+    """Library entry point. engine/baseline.py calls this after
+    eval_wrapper finishes; the return value becomes that script's exit
+    code. Side effects (progress, history, phase) are durable on disk
+    before this returns."""
     config = load_task_config(task_dir)
     if config is None:
         print("[baseline] ERROR: task.yaml not found", file=sys.stderr)
         return 1
 
     eval_data = json.loads(eval_json)
-    correctness = eval_data.get("correctness", False)
-    metrics = eval_data.get("metrics", {})
-    seed_val = metrics.get(config.primary_metric) if _valid(
-        metrics.get(config.primary_metric)) else None
-    ref_val = metrics.get("ref_latency_us") if _valid(
-        metrics.get("ref_latency_us")) else None
-
-    # Sticky baseline (see _baseline_init history): pin first ref capture
-    # so SEED retries don't drift speedup anchor.
     existing = load_progress(task_dir) or Progress()
-    existing_baseline = existing.baseline_metric
-    existing_source = existing.baseline_source
-    existing_baseline_commit = existing.baseline_commit
+    head_commit = current_head_short(task_dir) or "unknown"
+    reduction = reduce_baseline_init(
+        existing, config, eval_data, best_commit=head_commit)
 
-    if _valid(existing_baseline) and existing_source == "ref":
-        baseline_val = existing_baseline
-        baseline_source = "ref"
-        print(f"[baseline] sticky baseline = {existing_baseline} "
-              f"(kept from first eval; this round's ref={ref_val} ignored)",
+    if reduction.dropped_seed_metric is not None:
+        print(f"[baseline] dropping wrong-output seed timing "
+              f"(latency_us={reduction.dropped_seed_metric:.1f}) — "
+              f"kernel failed correctness "
+              f"so its measurement cannot anchor best_metric.",
               file=sys.stderr)
-    elif ref_val is not None:
-        baseline_val = ref_val
-        baseline_source = "ref"
-        existing_baseline_commit = None
-        print(f"[baseline] baseline = ref_latency_us = {ref_val} "
-              f"(PyTorch reference)", file=sys.stderr)
-    else:
-        baseline_val = seed_val
-        baseline_source = "seed_fallback"
-        existing_baseline_commit = None
-        print("[baseline] WARNING: ref_latency_us missing - baseline falls "
-              "back to seed metric", file=sys.stderr)
+    if reduction.anchor.message:
+        print(f"[baseline] {reduction.anchor.message}", file=sys.stderr)
 
-    # initial_best stays None when seed didn't profile (see B1 in audit
-    # history). keep_or_discard's `if best is None: KEEP` then accepts the
-    # first real kernel timing without comparing against a fake anchor.
-    initial_best = seed_val
-    baseline_commit = _git_short_head(task_dir)
-    baseline_commit_recorded = existing_baseline_commit or baseline_commit
+    save_progress(task_dir, reduction.progress, stamp=True)
 
-    n_cases = metrics.get("num_cases")
-    descs = metrics.get("per_shape_descs")
-    save_progress(task_dir, Progress(
-        task=config.name,
-        eval_rounds=0,
-        max_rounds=config.max_rounds,
-        best_metric=initial_best,
-        best_commit=(baseline_commit if seed_val is not None
-                     else "seed_profile_failed"),
-        baseline_commit=baseline_commit_recorded,
-        baseline_metric=baseline_val,
-        baseline_source=baseline_source,
-        baseline_correctness=correctness,
-        seed_metric=seed_val,
-        consecutive_failures=0,
-        plan_version=0,
-        status="no_plan",
-        num_cases=(int(n_cases) if isinstance(n_cases, int)
-                   and n_cases >= 1 else None),
-        per_shape_descs=(
-            [str(d) for d in descs if d]
-            if isinstance(descs, list) and descs else None
-        ),
-    ), stamp=True)
-
+    # Round 0 logs the SEED kernel's initial eval. `metrics.latency_us`
+    # is the seed's timing; `metrics.ref_latency_us` (if present) is the
+    # PyTorch baseline used as the speedup anchor.
     append_history(task_dir, {
         "round": 0,
         "description": "seed kernel initial eval",
         "decision": "SEED",
-        "metrics": metrics,
-        "correctness": correctness,
-        "commit": baseline_commit,
+        "metrics": reduction.metrics,
+        "outcome": reduction.outcome.value,
+        "correctness": reduction.correctness,
+        "commit": head_commit,
     })
 
-    if not correctness:
-        print(
-            "[baseline] ERROR: baseline eval failed correctness check.\n"
-            f"[baseline] seed {config.primary_metric}={seed_val} but output "
-            "did not match reference. Phase stays at BASELINE; "
-            "hook_post_bash will demote to GENERATE_KERNEL for a fix.",
-            file=sys.stderr,
-        )
-        return 3
+    if reduction.outcome != EvalOutcome.OK:
+        # Phase transition (PLAN for kernel_fail, untouched for infra_fail)
+        # is owned by on_baseline_settled, which dispatches on the
+        # `baseline_outcome` we just persisted. Calling it here keeps
+        # non-hook callers (notebook re-runs, tests) on the same code
+        # path as the Bash-hook flow.
+        PhaseController(task_dir).on_baseline_settled()
+        print(f"[baseline] {reduction.outcome.value}: "
+              f"{eval_data.get('error') or '(no detail)'}",
+              file=sys.stderr)
+        return _EXIT_FOR[reduction.outcome]
 
-    if seed_val is None:
-        print(
-            f"[baseline] ERROR: seed kernel produced no valid "
-            f"{config.primary_metric}.\n"
-            f"[baseline] profile_{config.name}_generation.py ran but no "
-            f"timing came back (result JSON missing, inf, or 0).\n"
-            f"[baseline] Check eval logs, fix kernel.py, rerun baseline.",
-            file=sys.stderr,
-        )
+    if reduction.seed_metric is None:
+        # Degenerate: outcome=OK but no primary metric (rare). Treat as
+        # kernel-no-timing — leave phase at BASELINE so the agent retries.
+        print(f"[baseline] ERROR: outcome=OK but no valid "
+              f"{config.primary_metric}; treating as kernel-no-timing.",
+              file=sys.stderr)
         return 2
 
-    PhaseController(task_dir).on_baseline_init_success()
+    PhaseController(task_dir).on_baseline_settled()
     print(f"[baseline] Initialized: task={config.name}, "
-          f"seed_{config.primary_metric}={seed_val}, "
-          f"baseline({baseline_source})={baseline_val}, "
-          f"commit={baseline_commit_recorded}", file=sys.stderr)
-    print("[baseline] Phase -> PLAN", file=sys.stderr)
+          f"seed_{config.primary_metric}={reduction.seed_metric}, "
+          f"baseline({reduction.anchor.source})={reduction.anchor.metric}, "
+          f"commit={head_commit}", file=sys.stderr)
     return 0

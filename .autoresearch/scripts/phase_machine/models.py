@@ -40,15 +40,30 @@ class Progress:
     # Sticky pytorch baseline (anchors speedup display; pinned by the first
     # baseline_init that captured ref_latency_us, see workflow/seed.py).
     baseline_metric: Optional[float] = None
-    baseline_commit: Optional[str] = None
     baseline_source: Optional[str] = None      # "ref" | "seed_fallback"
-    baseline_correctness: bool = False
+    baseline_outcome: Optional[str] = None     # task_config.EvalOutcome value
+    # error_source: "ref" | "kernel" | None. Set by run_verify's tagged
+    # try/excepts. "ref" => scaffold rejects + user must fix --ref source.
+    # "kernel" => normal seed-fail recovery via PLAN. None on success.
+    baseline_error_source: Optional[str] = None
+    # Per-shape ref timings (us) from the SEED round, sticky alongside
+    # baseline_metric. Without this, sticky-baseline rounds (which skip
+    # profile_base) had no per-shape ref to compute speedup_vs_ref as a
+    # geomean of per-shape ratios — speedup_vs_ref silently flipped from
+    # geomean (round 0) to scalar (round 1+).
+    baseline_per_shape_us: Optional[list] = None
+    # Fingerprint of the config used when baseline_metric was last
+    # measured. eval_client invalidates the sticky baseline when this
+    # doesn't match the current config — protects against users changing
+    # eval.warmup_times / eval.run_times or the case-count for the same
+    # task, where the old ref anchor would no longer be comparable.
+    # Shape: {"warmup_times": int, "run_times": int, "num_cases": int}.
+    baseline_fingerprint: Optional[dict] = None
     seed_metric: Optional[float] = None
 
     # Plan
     plan_version: int = 0
     next_pid: int = 0
-    status: str = "no_plan"
 
     # Multi-shape detail (single-shape ops keep these absent)
     num_cases: Optional[int] = None
@@ -106,9 +121,20 @@ class Progress:
             return cls()
         known = {f.name for f in fields(cls)}
         kept = {k: v for k, v in data.items() if k in known}
-        unknown = sorted(set(data) - known)
+        unknown = sorted(set(data) - known - _LEGACY_DROPPED)
         if unknown:
             import sys
             print(f"[Progress.from_dict] dropping unknown fields: {unknown}",
                   file=sys.stderr)
         return cls(**kept)
+
+
+# Field names that older Progress versions wrote to progress.json and we
+# no longer carry on the dataclass. Drop them silently — surfacing them
+# every load only pollutes stderr for tasks created before the schema
+# change.
+_LEGACY_DROPPED = frozenset({
+    "baseline_commit",       # deleted: only baseline.py self-referenced it
+    "baseline_correctness",  # deleted: implied by baseline_outcome == "ok"
+    "status",                # deleted: only stop_save wrote it, no reader
+})

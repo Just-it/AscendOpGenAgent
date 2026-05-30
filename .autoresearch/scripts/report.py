@@ -21,6 +21,7 @@ from typing import Optional
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from task_config import load_task_config
 from phase_machine import history_path, load_progress
+from utils.json_io import load_jsonl
 
 
 REPORT_FILE = "report.md"
@@ -31,20 +32,7 @@ def report_path(task_dir: str) -> str:
 
 
 def _load_history(task_dir: str) -> list[dict]:
-    path = history_path(task_dir)
-    if not os.path.exists(path):
-        return []
-    out = []
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                out.append(json.loads(line))
-            except json.JSONDecodeError:
-                pass
-    return out
+    return load_jsonl(history_path(task_dir))
 
 
 def _escape_md_cell(s: str) -> str:

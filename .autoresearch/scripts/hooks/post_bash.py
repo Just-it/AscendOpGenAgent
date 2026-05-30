@@ -5,36 +5,36 @@ PostToolUse hook for Bash — phase auto-advancement after user-issued commands.
 The only commands that advance phase from this hook are those Claude runs
 directly via the Bash tool:
   - `export AR_TASK_DIR=...`  → activate task, compute starting phase
-                                (fresh task: validate ref/kernel and pin the
-                                appropriate GENERATE_* / BASELINE phase)
-  - `baseline.py`             → PLAN on success;
-                                GENERATE_KERNEL on seed-metric failure
-                                (so kernel.py becomes editable again)
+                                (fresh task always lands at BASELINE; both
+                                reference.py and kernel.py are guaranteed
+                                present because /autoresearch requires both)
+  - `baseline.py`             → PLAN on success or on kernel_fail;
+                                infra_fail leaves phase untouched
   - `pipeline.py`             → whatever phase pipeline.py itself wrote
   - `create_plan.py`          → EDIT on plan validation pass
                                 (called from PLAN / DIAGNOSE / REPLAN)
 
-The inner pipeline steps (quick_check / eval_wrapper / keep_or_discard /
-settle) are subprocess children of pipeline.py and never re-enter this hook,
-so they don't need their own phase constants or branches here.
+The inner pipeline steps (quick_check / eval_wrapper subprocess +
+in-process record_round + settle subprocess) run beneath pipeline.py and
+never re-enter this hook, so they don't need their own phase constants
+or branches here.
 """
 import json
 import os
 import shlex
 import sys
 
-sys.path.insert(0, os.path.dirname(__file__))
-from hook_utils import read_hook_input, emit_status, emit_todowrite_context
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from hooks.utils import read_hook_input, emit_status, emit_todowrite_context
 from workflow import PhaseController
 from phase_machine import (
     read_phase, get_guidance, compute_resume_phase,
     get_task_dir, set_task_dir, get_active_item, touch_heartbeat,
     load_progress, update_progress,
-    validate_reference, validate_kernel, is_placeholder_file,
     parse_invoked_ar_script,
     progress_path, history_path, plan_path, edit_marker_path, state_path,
     PHASE_FILE,
-    BASELINE, PLAN, EDIT, DIAGNOSE, REPLAN, GENERATE_REF, GENERATE_KERNEL,
+    BASELINE, PLAN, EDIT, DIAGNOSE, REPLAN,
 )
 
 
@@ -69,17 +69,13 @@ def _clean_stale_edit_marker(task_dir: str):
     marker = edit_marker_path(task_dir)
     if not os.path.exists(marker):
         return
-    try:
-        import subprocess as _sp
-        diff = _sp.run(
-            ["git", "status", "--porcelain"],
-            cwd=task_dir, capture_output=True, text=True, timeout=5,
-        )
-        if not diff.stdout.strip():
+    from utils.git_utils import is_working_tree_clean
+    if is_working_tree_clean(task_dir):
+        try:
             os.remove(marker)
             emit_status("[AR] Cleaned stale edit marker (git is clean).")
-    except Exception:
-        pass
+        except OSError:
+            pass
 
 
 def _handle_activation(new_task_dir: str):
@@ -110,55 +106,40 @@ def _handle_activation(new_task_dir: str):
 
 
 def _fresh_start(task_dir: str):
-    """Pick initial phase for a fresh task based on which files are present
-    AND validate them. `is_placeholder_file` (canonical) lets us short-
-    circuit the subprocess-import step on a known stub; otherwise the same
-    validate_reference / validate_kernel that gates phase advances also
-    pins the right phase from the moment of activation."""
-    ref_path = os.path.join(task_dir, "reference.py")
-    kernel_path = os.path.join(task_dir, "kernel.py")
-    pc = PhaseController(task_dir)
-
-    if is_placeholder_file(ref_path):
-        pc.on_activation_no_ref()
-        emit_status(f"[AR] Fresh start (no reference). Phase -> GENERATE_REF. {get_guidance(task_dir)}")
-        return
-
-    ok, err = validate_reference(task_dir)
-    if not ok:
-        pc.on_activation_invalid_ref()
-        emit_status(
-            f"[AR] reference.py present but invalid — Phase -> GENERATE_REF.\n"
-            f"     {err}"
-        )
-        return
-
-    if is_placeholder_file(kernel_path):
-        pc.on_activation_no_kernel()
-        emit_status(f"[AR] Fresh start (no kernel). Phase -> GENERATE_KERNEL. {get_guidance(task_dir)}")
-        return
-
-    ok, err = validate_kernel(task_dir)
-    if not ok:
-        pc.on_activation_invalid_kernel()
-        emit_status(
-            f"[AR] kernel.py present but invalid — Phase -> GENERATE_KERNEL.\n"
-            f"     {err}"
-        )
-        return
-
-    pc.on_activation_ready()
+    """Pick initial phase for a fresh task. With /autoresearch requiring
+    both --ref and --kernel, scaffold has already gated on reference
+    runnability and written the user's seed kernel; the next legal step
+    is always BASELINE. baseline.py exercises the kernel; on failure the
+    hook routes to PLAN so the agent rewrites via plan->edit."""
+    PhaseController(task_dir).on_activation_ready()
     emit_status(f"[AR] Fresh start. Phase -> BASELINE. {get_guidance(task_dir)}")
 
 
-def _progress_update_for_plan(task_dir: str, phase: str):
-    """Set status=active after a valid new plan. `plan_version` is owned and
-    bumped by create_plan.py — this hook must NOT re-bump it (caused double
-    increments that jumped plan_version by 2 each REPLAN)."""
-    fields = {"status": "active"}
+def _baseline_message(outcome, new_phase, progress, guidance):
+    if outcome == "infra_fail":
+        if getattr(progress, "baseline_error_source", None) == "ref":
+            return ("[AR] Baseline INFRA_FAIL (ref): reference.py is broken. "
+                    "Fix the source file passed via --ref and re-run "
+                    "/autoresearch from scratch — reference.py is not "
+                    "editable from EDIT. Phase stays at BASELINE.")
+        return ("[AR] Baseline INFRA_FAIL: eval pipeline broken (no per-shape "
+                "data). Do NOT edit kernel.py. Fix env / device / eval.timeout "
+                "and re-run baseline.py.")
+    if outcome != "ok":
+        reason = ("seed kernel produced no timing"
+                  if progress.seed_metric is None
+                  else "seed kernel failed correctness / profile")
+        return (f"[AR] Baseline failed: {reason}. Phase -> PLAN. Plan a "
+                f"kernel fix/rewrite via the standard plan->edit loop. "
+                f"{guidance}")
+    return f"[AR] Baseline complete. Phase -> PLAN. {guidance}"
+
+
+def _reset_failures_for_diagnose(task_dir: str, phase: str):
+    """Zero consecutive_failures only on DIAGNOSE replan validation
+    (PLAN/REPLAN keep the streak — failures led to the replan)."""
     if phase == DIAGNOSE:
-        fields["consecutive_failures"] = 0
-    update_progress(task_dir, **fields)
+        update_progress(task_dir, consecutive_failures=0)
 
 
 def main():
@@ -193,23 +174,15 @@ def main():
         if not progress:
             emit_status("[AR] Baseline failed (no progress.json). Retry.")
         else:
-            # PhaseController.on_baseline_settled re-reads progress and
-            # picks PLAN vs GENERATE_KERNEL from seed_metric +
-            # baseline_correctness; the demote message stays here
-            # because it's user-facing.
-            new_phase = PhaseController(task_dir).on_baseline_settled()
-            if new_phase == GENERATE_KERNEL:
-                reason = ("seed kernel produced no timing"
-                          if progress.seed_metric is None
-                          else "seed kernel failed correctness check")
-                emit_status(
-                    f"[AR] Baseline failed: {reason}. "
-                    f"Phase -> GENERATE_KERNEL so kernel.py becomes editable. "
-                    f"Fix the kernel, then re-run baseline.py."
-                )
-            else:
-                emit_status(f"[AR] Baseline complete. Phase -> PLAN. "
-                            f"{get_guidance(task_dir)}")
+            # baseline.py / workflow.run_baseline_init already advanced the
+            # phase via PhaseController.on_baseline_settled before exiting.
+            # Read it back here — do NOT re-run the transition (used to be
+            # called from both sides, masked by the both-paths-land-on-PLAN
+            # accident for the success case).
+            new_phase = read_phase(task_dir)
+            outcome = getattr(progress, "baseline_outcome", None)
+            emit_status(_baseline_message(outcome, new_phase, progress,
+                                          get_guidance(task_dir)))
 
     elif invoked == "pipeline.py":
         # pipeline.py writes .phase itself; just project state + notify.
@@ -221,26 +194,26 @@ def main():
         from phase_machine import validate_plan, pending_settle_path
         # PLAN/DIAGNOSE/REPLAN: normal plan-creation flow.
         # EDIT: only legal as a recovery path when settle.py kept failing
-        # on a malformed plan.md (gated in hook_guard_bash by the
+        # on a malformed plan.md (gated in hooks/guard_bash by the
         # presence of .pending_settle.json). The new plan retires the
         # broken plan_version, so the orphan kd_json is no longer
         # actionable; clear the sidecar.
         #
         # NOTE: do NOT re-validate the diagnose artifact here. PreToolUse
-        # (hook_guard_bash) already enforced the artifact gate against the
+        # (hooks/guard_bash) already enforced the artifact gate against the
         # plan_version that existed BEFORE create_plan.py ran. By the time
         # this PostToolUse fires, create_plan.py has bumped plan_version
         # from N to N+1 — re-running diagnose_state would look for
         # diagnose_v(N+1).md (not yet created) and falsely reject.
         if phase == EDIT and not os.path.exists(pending_settle_path(task_dir)):
-            # Defense-in-depth: hook_guard_bash should have blocked this,
+            # Defense-in-depth: hooks/guard_bash should have blocked this,
             # but if it slipped through somehow, refuse to advance state.
             emit_status("[AR] create_plan.py in EDIT phase requires a "
                         "pending settle recovery state; nothing to do.")
             sys.exit(0)
         ok, err = validate_plan(task_dir)
         if ok:
-            _progress_update_for_plan(task_dir, phase)
+            _reset_failures_for_diagnose(task_dir, phase)
             PhaseController(task_dir).on_plan_validated()
             if phase == EDIT:
                 # Recovery completed: discard the orphan kd_json. The new

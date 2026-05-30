@@ -182,9 +182,11 @@ def find_model_new_forward(tree):
 def find_wrapper_functions(tree, kernel_names):
     """找到模块级别或类级别的辅助函数，这些函数内部调用了 triton kernel。
 
-    返回函数名集合。
+    返回函数名集合（类方法以 "ClassName.method_name" 格式存储）。
     """
     wrappers = set()
+
+    # --- 模块级别函数 ---
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.FunctionDef) and node.name not in kernel_names:
             for child in ast.walk(node):
@@ -198,13 +200,32 @@ def find_wrapper_functions(tree, kernel_names):
                     if resolved and resolved[0] is None and resolved[1] in kernel_names:
                         wrappers.add(node.name)
                         break
+
+    # --- 类级别方法（如 ModelNew._route） ---
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            class_name = node.name
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef) and item.name not in kernel_names:
+                    for child in ast.walk(item):
+                        if isinstance(child, ast.Call) and isinstance(child.func, ast.Subscript):
+                            name = _get_subscript_value_name(child.func)
+                            if name in kernel_names:
+                                wrappers.add(f"{class_name}.{item.name}")
+                                break
+                        if isinstance(child, ast.Call):
+                            resolved = _resolve_call_name(child)
+                            if resolved and resolved[0] is None and resolved[1] in kernel_names:
+                                wrappers.add(f"{class_name}.{item.name}")
+                                break
     return wrappers
 
 
-def check_kernel_calls_in_forward(forward_node, kernel_names, wrapper_names):
+def check_kernel_calls_in_forward(forward_node, kernel_names, wrapper_names, class_name="ModelNew"):
     """检查 forward 中是否调用了 triton kernel（直接或通过 wrapper）。
 
     返回被调用的 kernel/wrapper 名称集合。
+    支持 self._route(...) 形式的类级别 wrapper 调用。
     """
     called = set()
     if forward_node is None:
@@ -227,6 +248,9 @@ def check_kernel_calls_in_forward(forward_node, kernel_names, wrapper_names):
                 # self.wrapper_name(...)
                 if qual == "self" and attr in wrapper_names:
                     called.add(attr)
+                # self._route(...) -> 映射到 ClassName._route 格式
+                if qual == "self" and f"{class_name}.{attr}" in wrapper_names:
+                    called.add(f"{class_name}.{attr}")
     return called
 
 
@@ -239,6 +263,20 @@ def _count_kernel_launches_in_forward(forward_node):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Subscript):
             count += 1
     return count
+
+
+def _has_route_wrapper_call(forward_node):
+    """检查 forward() 中是否调用了 _route() 或其他合法的 kernel 调度 wrapper。"""
+    if forward_node is None:
+        return False
+    for node in ast.walk(forward_node):
+        if isinstance(node, ast.Call):
+            resolved = _resolve_call_name(node)
+            if resolved:
+                qual, attr = resolved
+                if qual == "self" and attr == "_route":
+                    return True
+    return False
 
 
 def check_forbidden_torch_ops(forward_node):
@@ -254,6 +292,7 @@ def check_forbidden_torch_ops(forward_node):
     # 例外：如果 forward() 中只有一个 kernel 启动，允许简单的固定次数循环
     #      （如 for _ in range(1) 这种无意义循环仍会被检测）
     kernel_launch_count = _count_kernel_launches_in_forward(forward_node)
+    has_route_wrapper = _has_route_wrapper_call(forward_node)
 
     for node in ast.walk(forward_node):
         if isinstance(node, ast.For):
@@ -330,21 +369,22 @@ def check_forbidden_torch_ops(forward_node):
             continue
 
         # --- tensor 方法计算操作 ---
-        if attr in FORBIDDEN_TENSOR_METHODS:
+        # `qual is None` 表示 bare-name 调用（如 `max(64, n)` 的 Python 内建），
+        # 不是 tensor 方法 — 跳过避免误伤 BLOCK_SIZE 这类标量 shape 数学。
+        if qual is not None and attr in FORBIDDEN_TENSOR_METHODS:
             # 排除已知安全的 qual（torch/F/triton 已在上面处理）
             if qual not in ("torch", "F", "triton", "functional", "torch.nn.functional", "nn.functional"):
                 violations.append({
                     "line": node.lineno,
-                    "call": f"{qual}.{attr}()" if qual else f"{attr}()",
+                    "call": f"{qual}.{attr}()",
                     "reason": f"{attr} 是计算操作，必须在 Triton kernel 中实现",
                 })
             continue
 
         # --- self.layer_name(x) —— 禁止 nn.Module 调用 ---
+        # 但允许 self._route()（kernel 分裂调度器）和 self.forward() 递归
         if qual == "self":
-            # 允许 self.forward() 递归，以及属性访问不在这里（ast.Attribute 不是 Call）
-            # self.xxx(...) 形式视为 nn.Module 前向调用
-            if attr not in ("forward",):
+            if attr not in ("forward", "_route"):
                 violations.append({
                     "line": node.lineno,
                     "call": f"self.{attr}(...)",
@@ -353,11 +393,13 @@ def check_forbidden_torch_ops(forward_node):
             continue
 
     # --- 规则 B: 如果 forward() 中 kernel 启动次数 > 1，视为 Type3 退化 ---
-    if kernel_launch_count > 1:
+    # 例外：如果 forward() 调用了 self._route() 等合法的 kernel 调度 wrapper，
+    #       则允许多次 kernel 启动（实际调度逻辑封装在 wrapper 中）
+    if kernel_launch_count > 1 and not has_route_wrapper:
         violations.append({
             "line": forward_node.lineno,
             "call": f"kernel 启动 {kernel_launch_count} 次",
-            "reason": "forward() 中只能启动一次 Triton kernel，多次启动表明核心计算在 host 端循环中完成",
+            "reason": "forward() 中只能启动一次 Triton kernel，多次启动表明核心计算在 host 端循环中完成（如需分裂调度，请将路由封装到 self._route() 方法中）",
         })
 
     return violations
@@ -437,7 +479,7 @@ def validate(code, filepath="<unknown>"):
         return result
 
     wrapper_names = find_wrapper_functions(tree, kernel_names)
-    called = check_kernel_calls_in_forward(forward_node, kernel_names, wrapper_names)
+    called = check_kernel_calls_in_forward(forward_node, kernel_names, wrapper_names, class_name="ModelNew")
     result["checks"]["kernel_called_from_forward"]["called"] = list(called)
 
     if not called:

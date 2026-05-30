@@ -11,9 +11,11 @@ Bash gate is three layers, each with one job:
        OTHER      anything else (ad-hoc bash, malformed AR, writes)
      Consults command text only — no phase, no filesystem.
 
-  2. PHASE TABLE — `_AR_ALLOWED_BY_PHASE` / `_OTHER_ALLOWED_BY_PHASE`.
-     Static dicts. LIFECYCLE / READONLY are implicitly allowed everywhere.
-     A rule change is a one-row edit.
+  2. PHASE TABLE — `_AR_ALLOWED_BY_PHASE`. Static dict.
+     LIFECYCLE / READONLY are implicitly allowed everywhere.
+     OTHER is never allowed (writes go through Edit/Write tool gated by
+     check_edit, state changes go through AR scripts) — a single
+     ownership invariant for .ar_state/ across both tools.
 
   3. `check_bash` — global string bans, classify(), table lookup.
 
@@ -27,7 +29,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from .state_store import (
-    INIT, GENERATE_REF, GENERATE_KERNEL, BASELINE, PLAN, EDIT,
+    INIT, BASELINE, PLAN, EDIT,
     DIAGNOSE, REPLAN, FINISH,
     PLAN_FILE, PLAN_ITEMS_FILE,
     load_progress, plan_path,
@@ -45,13 +47,19 @@ from .validators import get_active_item, has_pending_items
 # `-m` (runs module instead). Earlier rounds had a generic `--[\w-]+`
 # fallback; the result was that `python --version
 # .autoresearch/scripts/X.py` falsely classified as AR(X.py), and
-# hook_post_bash thought X.py had run.
+# hooks/post_bash thought X.py had run.
 #
 # Optional `(?:\S*?/)?` before `.autoresearch/scripts/` accepts both
 # relative invocations (`python .autoresearch/scripts/X.py`) and
 # absolute prefixes (`python /repo/.autoresearch/scripts/X.py`,
 # `python C:/repo/.autoresearch/scripts/X.py` after backslash
 # normalization).
+#
+# Optional `(?:engine/)?` after `.autoresearch/scripts/` accepts both
+# the post-restructure layout (engine/ holds blessed CLIs like
+# pipeline.py / baseline.py / create_plan.py / parse_args.py) and the
+# top-level lifecycle scripts (dashboard.py, scaffold.py, resume.py)
+# that stay at scripts/ root.
 # Common Python flags allowed by both `py` and `python*` (don't affect
 # script execution semantics; just runtime tweaks).
 _COMMON_PY_FLAGS = (
@@ -74,7 +82,8 @@ _CANONICAL_AR_RE = re.compile(
     r'python(?:\d+(?:\.\d+)?)?(?:\s+(?:' + _COMMON_PY_FLAGS + r'))*'
     r')'
     r'\s+(?:\S*?/)?\.autoresearch/scripts/'      # script (with optional path prefix)
-    r'([A-Za-z_]\w*\.py)\b'                      #   group 1 = basename
+    r'(engine/)?'                                # group 1: engine/ presence
+    r'([A-Za-z_]\w*\.py)\b'                      # group 2 = basename
     r'(?:\s+(?:'                                 # script args
     # Quoted strings: backtick and `$(` are forbidden (caught by the
     # pre-check in `classify`); `$VAR`/`${VAR}` are still fine.
@@ -85,6 +94,29 @@ _CANONICAL_AR_RE = re.compile(
     r'))*'
     r'\s*\Z'
 )
+
+# Canonical location per script. Used by classify to reject AR
+# invocations that match the regex shape but point at the wrong
+# directory (e.g., `python .autoresearch/scripts/pipeline.py` —
+# regex-OK but pipeline.py lives at engine/pipeline.py, so the bash
+# would 404 and post_bash would still announce "Pipeline complete").
+# The classifier rejects the wrong location before that can happen.
+_CANONICAL_LOCATION = {
+    # engine/ — AR scripts (subprocess pipeline) and parse_args lifecycle.
+    "baseline.py":     "engine",
+    "create_plan.py":  "engine",
+    "eval_kernel.py":  "engine",
+    "eval_wrapper.py": "engine",
+    "parse_args.py":   "engine",
+    "pipeline.py":     "engine",
+    "quick_check.py":  "engine",
+    "settle.py":       "engine",
+    # scripts/ root — LIFECYCLE scripts.
+    "dashboard.py": "root",
+    "report.py":    "root",
+    "resume.py":    "root",
+    "scaffold.py":  "root",
+}
 
 # READONLY check: a small tokenizer + per-command argspec.
 #
@@ -276,9 +308,16 @@ def classify(command: str) -> CommandShape:
 
     m = _CANONICAL_AR_RE.match(normalized)
     if m:
-        name = m.group(1)
-        klass = "LIFECYCLE" if name in _LIFECYCLE_SCRIPTS else "AR"
-        return CommandShape(klass, name)
+        has_engine = m.group(1) is not None
+        name = m.group(2)
+        canonical = _CANONICAL_LOCATION.get(name)
+        # Location must match the canonical mapping. Unknown basenames
+        # AND wrong-directory invocations fall through to the AR-mention
+        # non-canonical → OTHER path below, where check_bash rejects with
+        # the canonical-form message.
+        if canonical is not None and (canonical == "engine") == has_engine:
+            klass = "LIFECYCLE" if name in _LIFECYCLE_SCRIPTS else "AR"
+            return CommandShape(klass, name)
 
     segments = [s for s in _split_chain(command) if s.strip()]
     if segments and all(_is_readonly_segment(s) for s in segments):
@@ -302,16 +341,46 @@ def parse_canonical_ar(command: str) -> Optional[str]:
 
 def parse_invoked_ar_script(command: str) -> Optional[str]:
     """Basename of the AR script invocation, or None. Used by
-    hook_post_bash for routing on baseline.py / pipeline.py /
+    hooks/post_bash for routing on baseline.py / pipeline.py /
     create_plan.py."""
     return parse_canonical_ar(command)
 
 
+_SCRIPT_SHAPE_RE = re.compile(
+    r'\.autoresearch/scripts/((?:engine/)?[A-Za-z_]\w*\.py)\b'
+)
+# Match the python launcher as a whole word so unrelated tokens like
+# `python_helper` don't trigger the unknown-script hint on read-only
+# references (`cat .../python_helper.py`). `\bpy\b` is intentionally
+# omitted — it false-matches `.py` extensions in cat/git diff args.
+# Windows `py` launcher users should write `python` explicitly.
+_PY_LAUNCHER_RE = re.compile(r'\bpython(?:\d+(?:\.\d+)?)?\b')
+
+
 def parse_script_names(command: str) -> List[Tuple[str, str]]:
-    """Return [(path, basename)] for the AR script in `command`, or [].
-    Used by hook_guard_bash's hallucinated-name pre-check."""
-    invoked = parse_canonical_ar(command)
-    return [(f".autoresearch/scripts/{invoked}", invoked)] if invoked else []
+    """Return [(path, basename)] for every `.autoresearch/scripts/X.py`
+    reference in a python-invocation command, regardless of canonical-
+    location validity. Used by hooks/guard_bash's hallucinated/library/
+    unknown-name pre-check: that pass wants the basename even when the
+    invocation is non-canonical (wrong directory, malformed shape), so
+    it can give a targeted hint before check_bash falls through to the
+    generic canonical-form rejection.
+
+    Returns [] when the command isn't a python invocation — read-only
+    references (`cat .../X.py`, `git diff -- .../X.py`) and unrelated
+    chains don't get unknown-script hints.
+
+    Path is the slash-form sub-path under `.autoresearch/scripts/`
+    (e.g. `engine/eval.py` or `scaffold.py`); basename is the trailing
+    file name. Consumers today only read the basename."""
+    normalized = _normalize(command)
+    if not _PY_LAUNCHER_RE.search(normalized):
+        return []
+    out: List[Tuple[str, str]] = []
+    for sub in _SCRIPT_SHAPE_RE.findall(normalized):
+        basename = sub.rsplit("/", 1)[-1]
+        out.append((f".autoresearch/scripts/{sub}", basename))
+    return out
 
 
 def is_single_foreground_ar_invocation(command: str, *, script: str) -> tuple:
@@ -332,63 +401,45 @@ def is_single_foreground_ar_invocation(command: str, *, script: str) -> tuple:
 # someone tried `python .autoresearch/scripts/<x>.py task` directly.
 # An earlier version did substring-banning on the raw command, but
 # that falsely blocked harmless mentions like `echo quick_check.py`
-# or `git diff -- .autoresearch/scripts/settle.py` (READONLY shapes
+# or `git diff -- .autoresearch/scripts/engine/settle.py` (READONLY shapes
 # that mention the name in args, not invocations).
 _SUBPROCESS_ONLY_AR_SCRIPTS = {
-    "eval_wrapper.py":    "subprocess-only (invoked by pipeline.py)",
-    "keep_or_discard.py": "subprocess-only (invoked by pipeline.py)",
-    "quick_check.py":     "subprocess-only (invoked by pipeline.py)",
-    "settle.py":          "subprocess-only (invoked by pipeline.py)",
-    "_baseline_init.py":  "subprocess-only (invoked by baseline.py)",
+    "eval_wrapper.py": "subprocess-only (invoked by pipeline.py / baseline.py)",
+    "quick_check.py":  "subprocess-only (invoked by pipeline.py)",
+    "settle.py":       "subprocess-only (invoked by pipeline.py)",
 }
 
 # Per-phase: which AR script names may run.
 # LIFECYCLE scripts are always allowed (handled separately, not duplicated).
 # Subprocess-only scripts above are blocked everywhere.
 # EDIT-recovery (create_plan.py while .pending_settle.json exists) is
-# layered on top by hook_guard_bash; this table reflects the normal path.
+# layered on top by hooks/guard_bash; this table reflects the normal path.
 _AR_ALLOWED_BY_PHASE = {
-    INIT:            frozenset(),
-    GENERATE_REF:    frozenset(),
-    GENERATE_KERNEL: frozenset(),
-    BASELINE:        frozenset({"baseline.py"}),
-    DIAGNOSE:        frozenset({"create_plan.py"}),
-    PLAN:            frozenset({"create_plan.py"}),
-    REPLAN:          frozenset({"create_plan.py"}),
-    EDIT:            frozenset({"pipeline.py"}),
-    FINISH:          frozenset(),
-}
-
-# Per-phase: do we accept OTHER (ad-hoc shell, anything not classified
-# as AR/LIFECYCLE/READONLY)? Strict phases reject; permissive phases
-# accept. AR-mention-but-not-canonical is rejected in EVERY phase
-# (handled in check_bash, not via this table).
-_OTHER_ALLOWED_BY_PHASE = {
-    INIT:            False,
-    GENERATE_REF:    False,
-    GENERATE_KERNEL: False,
-    BASELINE:        False,
-    DIAGNOSE:        False,
-    PLAN:            True,
-    REPLAN:          True,
-    EDIT:            True,
-    FINISH:          True,
+    INIT:     frozenset(),
+    BASELINE: frozenset({"baseline.py"}),
+    DIAGNOSE: frozenset({"create_plan.py"}),
+    PLAN:     frozenset({"create_plan.py"}),
+    REPLAN:   frozenset({"create_plan.py"}),
+    EDIT:     frozenset({"pipeline.py"}),
+    FINISH:   frozenset(),
 }
 
 # Edit/Write rules: which file classes may be written per phase.
-#   "ref"      — reference.py
 #   "editable" — anything in task.yaml:editable_files
 # plan.md is never in any set — it's machine-generated.
+# reference.py is fixed at scaffold time and not editable thereafter.
 _EDIT_RULES = {
-    GENERATE_REF:    {"ref"},
-    GENERATE_KERNEL: {"editable"},
-    EDIT:            {"editable"},
+    EDIT: {"editable"},
 }
 
 
 _CANONICAL_FORM_REJECTION = (
     "AR scripts must be invoked directly: "
-    "`python .autoresearch/scripts/<name>.py <task_dir> [args...]`. "
+    "`python .autoresearch/scripts/engine/<name>.py <task_dir> [args...]` "
+    "for blessed CLIs (pipeline, baseline, create_plan, eval_wrapper, "
+    "quick_check, settle, parse_args), or "
+    "`python .autoresearch/scripts/<name>.py` for top-level scripts "
+    "(scaffold, resume, dashboard). "
     "Allowed alongside: env-var assignments, real Python flags "
     "(`-O`, `-u`, `-X dev`, ...), and FD redirection (`> log`, `2>&1`). "
     "Not supported: short-circuit flags (`--version`, `-c`, `-m`), "
@@ -421,7 +472,7 @@ def check_bash(phase: str, command: str) -> tuple:
     """
     if "git commit" in command:
         return False, ("manual 'git commit' forbidden — commits are "
-                       "produced by pipeline.py via keep_or_discard")
+                       "produced by pipeline.py via workflow.record_round")
 
     shape = classify(command)
 
@@ -445,21 +496,26 @@ def check_bash(phase: str, command: str) -> tuple:
                        f"allowed; allowed = {allowed_txt}")
 
     # OTHER. AR-mention here means a malformed AR shape (chain, wrapper,
-    # backgrounded, --version, etc.) — reject everywhere.
+    # backgrounded, --version, etc.) — reject with the canonical-form
+    # explanation. All other ad-hoc shell is rejected too: bash writes
+    # need to come through guard_edit's whitelist (Edit/Write tool) or an
+    # AR script, never raw `>` / `sed -i` / `cp`, because those bypass
+    # the .ar_state ownership invariant guard_edit enforces.
     if ".autoresearch/scripts/" in _normalize(command):
         return False, _CANONICAL_FORM_REJECTION
 
-    if _OTHER_ALLOWED_BY_PHASE.get(phase, False):
-        return True, ""
     return False, (f"phase {phase}: only AR scripts, lifecycle scripts, "
-                   f"and read-only commands are allowed")
+                   f"and read-only commands are allowed. Use the Edit / "
+                   f"Write tool (gated by phase) for file changes, or an "
+                   f"AR script for state changes — never ad-hoc bash.")
 
 
 _DIAGNOSE_ARTIFACT_RE = re.compile(r"^\.ar_state/diagnose_v\d+\.md$")
 
 
 def check_edit(phase: str, rel_path: str, editable_files,
-               *, diagnose_action: Optional[str] = None) -> tuple:
+               *, diagnose_action: Optional[str] = None,
+               pending_settle: bool = False) -> tuple:
     """Return (allowed: bool, reason: str) for an Edit/Write on `rel_path`
     (task-dir-relative, forward-slash form) at `phase`.
 
@@ -467,13 +523,12 @@ def check_edit(phase: str, rel_path: str, editable_files,
     progress, history, plan.md, report.md, heartbeat, and markers are all
     machine-maintained — letting Claude Edit them would let the model skip
     phases, rewrite counters, or forge history. Two paths are agent-writable:
-      - .ar_state/plan_items.xml: the XML input file /autoresearch hands to
-        create_plan.py. In DIAGNOSE this write is gated on
-        `diagnose_action` so the agent can't pre-stage stale plan input
-        before the subagent has produced (or the cap has retired) the
-        diagnosis artifact. Caller hooks are expected to compute the
-        action via `diagnose_state(...).action` and pass it; if not
-        provided, the gate is open (matches pre-DIAGNOSE behaviour).
+      - .ar_state/plan_items.xml: the XML input file create_plan.py
+        consumes. Writable iff create_plan.py is the legal next AR script,
+        which is PLAN / REPLAN / DIAGNOSE (gated on diagnose_action) and
+        EDIT under pending-settle recovery. Caller hooks are expected to
+        compute diagnose_action via `diagnose_state(...).action` and
+        pending_settle from `.pending_settle.json` existence.
       - .ar_state/diagnose_v<N>.md: the DIAGNOSE-phase artifact. The
         ar-diagnosis subagent is the intended writer (per the prompt
         contract), but hook payloads do NOT distinguish main agent from
@@ -486,21 +541,34 @@ def check_edit(phase: str, rel_path: str, editable_files,
     """
     if rel_path.startswith(".ar_state/"):
         if rel_path == f".ar_state/{PLAN_ITEMS_FILE}":
-            # In DIAGNOSE the write is gated on the three-state action
-            # (see validators.diagnose_state). NEED_DIAGNOSIS = subagent
-            # hasn't validated yet; allowing plan_items.xml here lets the
-            # agent skip the diagnosis. READY / MANUAL_FALLBACK both
-            # legitimately want the plan input written.
-            if (phase == DIAGNOSE
-                    and diagnose_action == "NEED_DIAGNOSIS"):
+            if phase in (PLAN, REPLAN):
+                return True, ""
+            if phase == DIAGNOSE:
+                # Fail-closed: only the two affirmative states pass.
+                # NEED_DIAGNOSIS (subagent hasn't validated) and None
+                # (caller didn't compute action) both reject — caller is
+                # required to pass a valid action to unlock the gate.
+                # See validators.diagnose_state for the constants.
+                if diagnose_action in ("DIAGNOSIS_READY", "MANUAL_FALLBACK"):
+                    return True, ""
                 return False, (
-                    f".ar_state/{PLAN_ITEMS_FILE} is locked while DIAGNOSE "
-                    f"awaits a valid diagnosis artifact. Issue Task with "
-                    f"subagent_type='ar-diagnosis' first; once the artifact "
-                    f"validates (or the attempt cap relaxes the gate) "
-                    f"plan_items.xml becomes writable."
+                    f".ar_state/{PLAN_ITEMS_FILE} is locked in DIAGNOSE "
+                    f"until the diagnosis artifact validates. Issue Task "
+                    f"with subagent_type='ar-diagnosis' first; once the "
+                    f"artifact passes (or the attempt cap relaxes the "
+                    f"gate to MANUAL_FALLBACK) plan_items.xml becomes "
+                    f"writable. (current diagnose_action={diagnose_action!r})"
                 )
-            return True, ""
+            if phase == EDIT and pending_settle:
+                # settle.py crashed mid-round; create_plan.py is allowed
+                # as recovery, so plan_items.xml input is too.
+                return True, ""
+            return False, (
+                f".ar_state/{PLAN_ITEMS_FILE} is only writable when "
+                f"create_plan.py is the legal next step "
+                f"(PLAN / REPLAN / DIAGNOSE.{{READY,FALLBACK}} / "
+                f"EDIT.pending-settle); current phase={phase}."
+            )
         if _DIAGNOSE_ARTIFACT_RE.match(rel_path):
             if phase == DIAGNOSE:
                 return True, ""
@@ -513,7 +581,7 @@ def check_edit(phase: str, rel_path: str, editable_files,
                 f"plan.md is machine-generated — never hand-edit it. Write "
                 f"your <items>...</items> XML to .ar_state/{PLAN_ITEMS_FILE} "
                 f"with the Write tool, then run "
-                f"`python .autoresearch/scripts/create_plan.py \"<task_dir>\"`."
+                f"`python .autoresearch/scripts/engine/create_plan.py \"<task_dir>\"`."
             )
         return False, (
             f"{rel_path!r} is machine-maintained state. Only "
@@ -524,8 +592,6 @@ def check_edit(phase: str, rel_path: str, editable_files,
         )
 
     allowed_classes = _EDIT_RULES.get(phase, set())
-    if "ref" in allowed_classes and rel_path == "reference.py":
-        return True, ""
     if "editable" in allowed_classes and rel_path in set(editable_files or ()):
         return True, ""
 
@@ -558,30 +624,45 @@ def compute_next_phase(task_dir: str) -> str:
 
 
 def compute_resume_phase(task_dir: str) -> str:
-    """Determine phase for resuming after interruption."""
+    """Determine phase for resuming after interruption.
+
+    Mirrors PhaseController.on_baseline_settled for outcomes the live
+    hook never advanced past BASELINE — INFRA_FAIL keeps the task pinned
+    at BASELINE so stop_save can let the agent exit with a clear "fix
+    --ref" / "fix env" message. Without that parity, resuming a stuck
+    task would land in PLAN and the agent would burn max_rounds trying
+    to plan around it."""
     progress = load_progress(task_dir)
     if not progress:
         return BASELINE
 
-    status = progress.get("status", "no_plan")
     eval_rounds = progress.get("eval_rounds", 0)
     max_rounds = progress.get("max_rounds", 999)
 
     if eval_rounds >= max_rounds:
         return FINISH
 
-    # Baseline didn't settle cleanly → demote to GENERATE_KERNEL so Edit on
-    # kernel.py is permitted again (BASELINE phase blocks editable_files
-    # writes). Mirrors hook_post_bash's live-session demotion: both
-    # seed_metric=None (no timing) and baseline_correctness=False (wrong
-    # output) count as failure. A seed that profiled but didn't verify is
-    # still a broken seed — letting resume enter PLAN would build a plan
-    # against a reference that the kernel doesn't actually match.
-    if (progress.get("seed_metric") is None
-            or progress.get("baseline_correctness") is False):
-        return GENERATE_KERNEL
+    # Stuck states from a previous baseline: keep at BASELINE so
+    # stop_save._is_stuck fires and the agent can Stop. The carve-out
+    # MUST match on_baseline_settled exactly — both import the same
+    # STUCK_BASELINE_OUTCOMES set so they cannot drift.
+    import sys as _sys, os as _os
+    _scripts_dir = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    if _scripts_dir not in _sys.path:
+        _sys.path.insert(0, _scripts_dir)
+    from task_config.metric_policy import STUCK_BASELINE_OUTCOMES
+    if progress.get("baseline_outcome") in STUCK_BASELINE_OUTCOMES:
+        return BASELINE
 
-    if not os.path.exists(plan_path(task_dir)) or status == "no_plan":
+    # Kernel-side baseline failure: route to PLAN. seed_metric=None (no
+    # timing) and baseline_outcome != "ok" (kernel_fail) both mean the
+    # seed needs rewriting; PLAN guidance surfaces a SEED FAILED block
+    # pushing the agent to rewrite kernel.py as plan items.
+    if (progress.get("seed_metric") is None
+            or progress.get("baseline_outcome") != "ok"):
+        return PLAN
+
+    if not os.path.exists(plan_path(task_dir)):
         return PLAN
 
     if get_active_item(task_dir) is not None or has_pending_items(task_dir):

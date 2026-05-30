@@ -9,14 +9,14 @@ Other phases: Task is left alone (host doesn't gate it). Wrong subagent_type
 in DIAGNOSE → block with a clear retry reason.
 
 This hook does NOT do artifact validation — that's PostToolUse's job
-(hook_post_task.py). PreToolUse's only role is "is this Task call legal at
+(hooks/post_task.py). PreToolUse's only role is "is this Task call legal at
 all in the current phase".
 """
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(__file__))
-from hook_utils import read_hook_input, block_decision
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from hooks.utils import read_hook_input, block_decision
 from phase_machine import (
     DIAGNOSE, DIAGNOSE_ATTEMPTS_CAP, get_task_dir, read_phase,
     touch_heartbeat, diagnose_state,
@@ -45,7 +45,7 @@ def main():
         sys.exit(0)
 
     # Hard cap: once subagent attempts hit the limit on this plan_version,
-    # the manual-planning fallback is in effect (see hook_post_task). Block
+    # the manual-planning fallback is in effect (see hooks/post_task). Block
     # further Task calls so the agent doesn't burn context retrying a path
     # that has empirically failed; redirect them to write plan_items.xml
     # directly and run create_plan.py.

@@ -21,7 +21,7 @@ from typing import Any
 
 PROGRESS_FILENAME = "batch_progress.json"
 LOG_FILENAME = "batch.log"
-VALID_MODES = ("ref-kernel", "ref")
+VALID_MODES = ("ref-kernel",)
 VALID_STATUSES = ("pending", "running", "done", "error", "skip")
 
 
@@ -73,8 +73,7 @@ def resolve_cases(batch_dir: Path, manifest: dict, mode: str) -> list[dict]:
     """Apply the <op_name>_{ref,kernel}.py naming convention and return resolved
     case dicts. Pre-flight check that every referenced file exists.
 
-    Returns a list of dicts with keys: op_name, ref (abs path), kernel (abs path
-    or None).
+    Returns a list of dicts with keys: op_name, ref (abs path), kernel (abs path).
     """
     if mode not in VALID_MODES:
         raise ManifestError(f"mode must be one of {VALID_MODES}, got {mode!r}")
@@ -90,14 +89,12 @@ def resolve_cases(batch_dir: Path, manifest: dict, mode: str) -> list[dict]:
     if not ref_dir.is_dir():
         raise ManifestError(f"ref_dir not found: {ref_dir}")
 
-    kernel_dir = None
-    if mode == "ref-kernel":
-        kernel_dir_raw = manifest.get("kernel_dir")
-        if not kernel_dir_raw:
-            raise ManifestError("kernel_dir required when mode=ref-kernel")
-        kernel_dir = (batch_dir / kernel_dir_raw).resolve()
-        if not kernel_dir.is_dir():
-            raise ManifestError(f"kernel_dir not found: {kernel_dir}")
+    kernel_dir_raw = manifest.get("kernel_dir")
+    if not kernel_dir_raw:
+        raise ManifestError("kernel_dir is required")
+    kernel_dir = (batch_dir / kernel_dir_raw).resolve()
+    if not kernel_dir.is_dir():
+        raise ManifestError(f"kernel_dir not found: {kernel_dir}")
 
     cases: list[dict] = []
     seen: set[str] = set()
@@ -117,18 +114,16 @@ def resolve_cases(batch_dir: Path, manifest: dict, mode: str) -> list[dict]:
         if not ref_path.is_file():
             raise ManifestError(f"{ref_path.relative_to(batch_dir)} not found")
 
-        kernel_path: Path | None = None
-        if kernel_dir is not None:
-            kernel_path = kernel_dir / f"{op_name}_kernel.py"
-            if not kernel_path.is_file():
-                raise ManifestError(
-                    f"{kernel_path.relative_to(batch_dir)} not found"
-                )
+        kernel_path = kernel_dir / f"{op_name}_kernel.py"
+        if not kernel_path.is_file():
+            raise ManifestError(
+                f"{kernel_path.relative_to(batch_dir)} not found"
+            )
 
         cases.append({
             "op_name": op_name,
             "ref": str(ref_path),
-            "kernel": str(kernel_path) if kernel_path else None,
+            "kernel": str(kernel_path),
         })
 
     return cases
@@ -261,69 +256,163 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent.parent.parent
 
 
-def find_recent_task_dir(op_name: str, since_ts: float) -> Path | None:
-    """Resolve the task_dir that this op's scaffold just produced.
+_SCAFFOLD_RESULT_STATUSES = frozenset({"ok", "error"})
+_SCAFFOLD_CREATED_MARKER = "[scaffold] Task directory created: "
+_HEX6 = frozenset("0123456789abcdef")
 
-    Authoritative path: read the per-op pointer scaffold writes after
-    creating the dir (`<repo>/.autoresearch/.task_dir_pointers/<op>`).
-    Pointer wins because it's deterministic and immune to mtime races
-    (concurrent runs of different ops, stale prior task_dirs).
 
-    Fallback: mtime-scan `ar_tasks/<op>_*` filtered by `since_ts` for
-    tasks scaffolded before this change (no pointer file). This branch
-    keeps existing batch state usable across the upgrade.
-    """
+def task_dir_belongs_to_op(name: str, op: str) -> bool:
+    """Exact match for scaffold's `<op>_<int(time.time())>_<uuid.hex[:6]>`
+    layout. Prefix-only matching would let op="avg" claim
+    `avg_pool2d_*`; this splits off the last two `_` fields and
+    compares the head verbatim."""
+    parts = name.rsplit("_", 2)
+    if len(parts) != 3:
+        return False
+    head, ts, rand = parts
+    return (head == op
+            and ts.isdigit() and ts
+            and len(rand) == 6 and all(c in _HEX6 for c in rand))
+
+
+def parse_scaffold_created_line(line: str) -> Path | None:
+    """Early identity bind: scaffold prints
+    `[scaffold] Task directory created: <abs>` on stderr right after
+    mkdir, BEFORE baseline runs (which can stay silent >5s and would
+    otherwise let the mid-run mtime fallback race a sibling batch)."""
+    idx = line.find(_SCAFFOLD_CREATED_MARKER)
+    if idx < 0:
+        return None
+    path = line[idx + len(_SCAFFOLD_CREATED_MARKER):].strip()
+    if not path:
+        return None
+    p = Path(path)
+    return p if p.is_dir() else None
+
+
+def parse_scaffold_result_line(line: str) -> Path | None:
+    """Identity-bound task_dir: a scaffold result JSON in THIS claude
+    subprocess's stdout names the dir scaffold created for THIS run.
+    Accepts both ok and error shapes — ok is OK / KERNEL_FAIL (both
+    activatable, rc=0); error is INFRA_FAIL (rc=4) which still carries
+    task_dir for inspection. Done/error verdict is decided downstream
+    from .phase + rc."""
+    s = line.strip()
+    if not (s.startswith("{") and s.endswith("}")):
+        return None
+    try:
+        d = json.loads(s)
+    except json.JSONDecodeError:
+        return None
+    if (not isinstance(d, dict)
+            or d.get("status") not in _SCAFFOLD_RESULT_STATUSES):
+        return None
+    td = d.get("task_dir")
+    if not isinstance(td, str):
+        return None
+    p = Path(td)
+    return p if p.is_dir() else None
+
+
+def snapshot_task_dirs() -> set[Path]:
+    """Current `ar_tasks/<dir>` set. Diff against a later snapshot to
+    find dirs created since."""
+    tasks_root = repo_root() / "ar_tasks"
+    if not tasks_root.is_dir():
+        return set()
+    return {d for d in tasks_root.iterdir() if d.is_dir()}
+
+
+def pick_new_task_dir(pre_snapshot: set[Path], op_name: str) -> Path | None:
+    """Post-process fallback when no in-loop identity bind landed.
+    Among `current - pre_snapshot` whose name passes
+    `task_dir_belongs_to_op` (exact `<op>_<ts>_<hex6>` match), prefer
+    the per-op pointer scaffold writes when it lands inside the new
+    set, else most-recent mtime."""
+    tasks_root = repo_root() / "ar_tasks"
+    if not tasks_root.is_dir():
+        return None
+    try:
+        current = {d for d in tasks_root.iterdir() if d.is_dir()}
+    except OSError:
+        return None
+    new = current - pre_snapshot
+    matches = [d for d in new if task_dir_belongs_to_op(d.name, op_name)]
+    if not matches:
+        return None
+    # Per-op pointer hint: trust only when it points inside `new`.
     import sys as _sys
     _scripts_dir = str(Path(__file__).resolve().parent.parent)
     if _scripts_dir not in _sys.path:
         _sys.path.insert(0, _scripts_dir)
-    from phase_machine import read_task_dir_pointer  # noqa: E402
+    try:
+        from phase_machine import read_task_dir_pointer  # noqa: E402
+        pointed = read_task_dir_pointer(op_name)
+    except Exception:
+        pointed = None
+    if pointed is not None and Path(pointed) in new:
+        return Path(pointed)
+    matches.sort(key=lambda d: d.stat().st_mtime, reverse=True)
+    return matches[0]
 
-    pointed = read_task_dir_pointer(op_name)
-    if pointed is not None:
-        # Reject pointers that predate this run (e.g. left over from a
-        # crashed previous attempt). The since_ts guard mirrors the
-        # mtime-fallback's rule so behaviour at the call site is uniform.
+
+def _parse_iso_ts(s: Any) -> float:
+    if not isinstance(s, str):
+        return 0.0
+    try:
+        return datetime.fromisoformat(s).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def find_running_case_task_dir(batch_dir: Path) -> Path | None:
+    """task_dir of THIS batch's currently-running case, sourced from
+    filesystem state — not from `batch_progress.task_dir`, which depends
+    on `claude --print` flushing the scaffold line to stdout and can lag
+    by tens of minutes.
+
+    Primary source: `<repo>/.autoresearch/.active_task`, written by the
+    post_bash hook the instant Claude runs `export AR_TASK_DIR=...`.
+    Scoped to this batch by verifying the pointed dir's name matches
+    the running case's op (so a sibling batch / manual session sharing
+    `ar_tasks/` can't bleed into this view)."""
+    progress = load_progress(batch_dir)
+    if not progress:
+        return None
+    running = [(op, v) for op, v in (progress.get("cases") or {}).items()
+               if isinstance(v, dict) and v.get("status") == "running"]
+    if not running:
+        return None
+    running.sort(key=lambda kv: kv[1].get("started_at", ""), reverse=True)
+    op, case = running[0]
+
+    pointer = repo_root() / ".autoresearch" / ".active_task"
+    if pointer.is_file():
         try:
-            mt = Path(pointed).stat().st_mtime
-            if mt >= since_ts:
-                return Path(pointed)
+            td = Path(pointer.read_text(encoding="utf-8").strip())
         except OSError:
-            pass
+            td = None
+        if td is not None and td.is_dir() and task_dir_belongs_to_op(td.name, op):
+            return td
 
+    # run.py's stdout-parsed record: usable when claude has flushed.
+    recorded = case.get("task_dir")
+    if isinstance(recorded, str):
+        p = Path(recorded)
+        if p.is_dir() and task_dir_belongs_to_op(p.name, op):
+            return p
+
+    # Last-ditch: scan ar_tasks/ for matches with mtime >= started_at.
+    started_ts = _parse_iso_ts(case.get("started_at"))
     tasks_root = repo_root() / "ar_tasks"
-    if not tasks_root.is_dir():
-        return None
-    candidates: list[tuple[float, Path]] = []
-    for d in tasks_root.glob(f"{op_name}_*"):
+    if tasks_root.is_dir():
         try:
-            mt = d.stat().st_mtime
+            cands = [d for d in tasks_root.iterdir()
+                     if d.is_dir()
+                     and task_dir_belongs_to_op(d.name, op)
+                     and d.stat().st_mtime >= started_ts]
         except OSError:
-            continue
-        if mt >= since_ts:
-            candidates.append((mt, d))
-    if not candidates:
-        return None
-    candidates.sort(reverse=True)
-    return candidates[0][1]
-
-
-def find_active_task_dir() -> Path | None:
-    """Most-recently-touched task dir (heartbeat preferred over dir mtime)."""
-    tasks_root = repo_root() / "ar_tasks"
-    if not tasks_root.is_dir():
-        return None
-    best: Path | None = None
-    best_mt = -1.0
-    for d in tasks_root.iterdir():
-        if not d.is_dir():
-            continue
-        hb = d / ".ar_state" / ".heartbeat"
-        try:
-            mt = hb.stat().st_mtime if hb.exists() else d.stat().st_mtime
-        except OSError:
-            continue
-        if mt > best_mt:
-            best_mt = mt
-            best = d
-    return best
+            cands = []
+        if cands:
+            return max(cands, key=lambda d: d.stat().st_mtime)
+    return None

@@ -319,7 +319,7 @@ while iteration < max_iterations:
 | 文件路径错误 | FileNotFoundError |
 | 设备不可用 | NPU out of memory、device not found |
 | 依赖缺失 | ModuleNotFoundError（非代码导致） |
-| 超时 | Timeout、进程被杀死 |
+| 超时 | Timeout、进程被杀死 → **必须降低 --repeats 重试（50→20→10→5），不可不经调整直接放弃或编造数据** |
 
 ---
 
@@ -813,6 +813,7 @@ ${pwd}/triton_ascend_output/op_{op_name}_{timestamp}_{rid}/
 | Phase 3 | 达到 max_iterations | 输出失败报告，任务结束 |
 | Phase 3 | B 类环境错误 | 立即终止，任务失败 |
 | Phase 3 | C 类重复错误 | 立即终止，任务失败 |
+| Phase 3/Phase 4 | benchmark.py 超时/被 kill | **严禁编造数据**。降低 --repeats 重试（50→20→10→5），任意值成功即采纳该结果。所有值均超时则标记 B 类错误 |
 | Phase 4 | 无更多优化点 + 无效果 | 以 Phase 3 结果继续 |
 | Phase 4 | B 类环境错误 | 终止优化，以 Phase 3 结果继续 |
 | Phase 4.5 | 分裂失败（精度/性能不达标） | 静默回退到 Phase 4 结果，不阻塞主流程 |
@@ -853,6 +854,8 @@ agent 收到 exit 2 时，必须按下表把它**等价映射**到对应 verify 
 | 验证方式 | 必须调用 kernel-verifier skill 的脚本，禁止自创测试 |
 | 语言 | 思考、分析、日志使用中文；代码、路径使用英文 |
 | 时间戳/随机数 | 必须通过 bash 获取，禁止 LLM 模拟 |
+| 性能数据真实性 | **严禁编造、估算、模拟 benchmark 性能数据**。所有性能数据必须从 benchmark.py 实际输出的 perf_result.json 文件中读取，任何未经验证的数值不得写入 summary.json / report.md |
+| Benchmark 超时降级 | benchmark.py 超时或被 kill 时，**必须**自动降低 --repeats 值重试（50 → 20 → 10 → 5），不可不经参数调整直接重试。所有降级值均超时则标记 B 类错误，任务失败 |
 
 ---
 

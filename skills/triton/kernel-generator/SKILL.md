@@ -212,6 +212,95 @@ class ModelNew(nn.Module):
         return output
 ```
 
+**⚠️ 重要**：验证框架通过 `ModelNew(*get_init_inputs())` 实例化、`model(*get_inputs())` 调用，因此 `__init__` 和 `forward` 的参数必须与上述函数返回值一一对应：
+- **`__init__` 的参数必须与 `get_init_inputs()` 返回值一一对应**。如果返回空列表则 `__init__(self)` 无额外参数；如果返回 `[num_features, num_groups]`，则必须写 `__init__(self, num_features, num_groups)`。
+- **`forward` 的参数必须与 `get_inputs()` 返回值一一对应**。
+
+1. 必须生成ModelNew类，格式如下：
+```python
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def {{ op_name }}_kernel(...):
+    # kernel实现
+    ...
+
+class ModelNew(torch.nn.Module):
+    def __init__(self, ...):
+        super().__init__()
+        # 如果有nn.Module参数（如nn.Linear, nn.Conv2d），需要：
+        # 1. 在__init__开始时设置固定随机种子（与验证模板中的种子一致）
+        # 2. 通过nn.Linear/nn.Conv2d等构建参数，然后提取weight和bias
+        # 3. 使用nn.Parameter包装，确保与原始Model的权重一致
+        torch.manual_seed(0)  # 固定种子（与kernel_verify_template.j2中的种子一致）
+        # 例如：
+        # linear = nn.Linear(in_features, out_features)
+        # self.weight = nn.Parameter(linear.weight.clone())
+        # self.bias = nn.Parameter(linear.bias.clone()) if linear.bias is not None else None
+    
+    def forward(self, ...):
+        # 调用kernel函数
+        return {{ op_name }}_kernel(...)
+```
+
+2. 对于无参数的算子（如ReLU），`__init__`可以为空：
+```python
+class ModelNew(nn.Module):
+    def __init__(self):
+        super().__init__()
+    
+    def forward(self, x):
+        return xxx_kernel(x)
+```
+
+3. 对于有参数的算子（如Linear/Dense, Conv2d），必须在`__init__`中通过固定随机种子构建参数：
+```python
+class ModelNew(nn.Module):
+    def __init__(self, in_features, out_features):
+        super().__init__()
+        torch.manual_seed(0)  # 固定种子，确保与原始Model权重一致
+        linear = nn.Linear(in_features, out_features)
+        self.weight = nn.Parameter(linear.weight.clone())
+        self.bias = nn.Parameter(linear.bias.clone()) if linear.bias is not None else None
+    
+    def forward(self, x):
+        return xxx_kernel(x, self.weight, self.bias)
+```
+**注意**：以上self属性只针对于需要用到内置参数的实现，对于使用get_inputs或get_init_inputs传入的参数，需要直接调用。
+
+4. 对于任务输入中固定写死的init_inputs参数，以及class外定义的参数，硬编码至代码中。
+所需要的shape参数，要从inputs的数据形状中获取，以适应不同的输入（**重要** 需要仔细检查输入的变量和shape与代码中一一对应）：
+```python
+def forward(self, input_tensor, ...):
+    # 硬编码的参数（如果有无法从inputs中获取的参数）
+    # args = ... # 无法从inputs中获取的参数信息硬编码于此
+    
+  # 从输入张量获取shape参数
+  P1, P2, P3 = input_tensor.shape  # 变量名应该与inputs构造时对应的变量保持一致
+  ...
+  # 执行 kernel 函数
+  ...
+```
+
+5. 卷积类算子生成注意事项：
+请注意！！如果检测到给出的任务是卷积类的算子任务，为了保证ModelNew的卷积核权重与当前任务代码的卷积核权重一致，需要在ModelNew的`__init__`中通过固定随机种子构建参数：
+```python
+class ModelNew(torch.nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, ...):
+        super().__init__()
+        torch.manual_seed(0)  # 固定种子，确保与原始Model权重一致
+        # 创建Conv层并提取weight和bias
+        conv = nn.Conv2d(in_channels, out_channels, kernel_size, ...)
+        self.weight = nn.Parameter(conv.weight.clone())
+        self.bias = nn.Parameter(conv.bias.clone()) if conv.bias is not None else None
+    
+    def forward(self, x):
+        return conv_kernel(x, self.weight, self.bias, ...)
+```
+请务必保证nn中调用的module要与任务代码中调用的module要一致，使用的参数要一致。
+
 ### 关键约束
 
 | 约束 | 说明 |
@@ -224,42 +313,6 @@ class ModelNew(nn.Module):
 | 无测试代码 | 不需要生成测试代码 |
 | 权重一致 | 含随机权重的算子（Conv2d/Linear 等）必须通过固定种子确保权重一致 |
 | **禁止 PyTorch 退化** | **forward() 中所有核心计算必须在 @triton.jit kernel 中实现，禁止使用 torch.*/F.*/tensor 方法/tensor 运算符** |
-
-### 含随机权重算子的权重一致性（关键！）
-
-当任务描述中的 `Model` 类包含 `nn.Conv2d`、`nn.Linear`、`nn.ConvTranspose2d` 等带可学习参数的模块，或者使用 `torch.randn` / `nn.Parameter(torch.randn(...))` 创建随机参数时，**必须**在 `ModelNew.__init__` 中通过固定随机种子来确保与原 `Model` 的权重完全一致。
-
-**原理**：验证框架会在创建 `Model` 前调用 `torch.manual_seed(0)`，再在创建 `ModelNew` 前再次调用 `torch.manual_seed(0)`。只要两者在 `__init__` 内部以相同的顺序创建参数，就能获得完全一致的权重。
-
-**标准模式**：
-
-```python
-class ModelNew(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size, ...):
-        super().__init__()
-        # 1. 固定种子 — 必须与验证框架中的种子一致 (0)
-        torch.manual_seed(0)
-
-        # 2. 按照原 Model 的**完全相同的顺序**创建模块并提取权重
-        #    确保随机数消耗顺序一致
-        conv = nn.Conv2d(in_channels, out_channels, kernel_size)
-        self.weight = nn.Parameter(conv.weight.clone())
-        self.bias = nn.Parameter(conv.bias.clone()) if conv.bias is not None else None
-
-        # 如果原 Model 还有其他随机参数（如 nn.Parameter(torch.randn(...))），
-        # 也必须在此按相同顺序创建
-        self.extra_bias = nn.Parameter(torch.randn(bias_shape))
-
-    def forward(self, x):
-        # 使用提取的权重调用自定义 kernel
-        return custom_conv_kernel(x, self.weight, self.bias, ...)
-```
-
-**核心要点**：
-1. `ModelNew.__init__` 的**第一行**必须调用 `torch.manual_seed(0)`
-2. 参数创建的**顺序**必须与原 `Model.__init__` 完全一致（因为每次 `torch.randn` 调用会推进随机状态）
-3. 通过创建相同的 `nn.Module`（如 `nn.Conv2d`）来获取权重，而非手动 `torch.randn` —— 这保证内部参数的 shape 和初始化方式一致
-4. 如果原 `Model` 有多个含权重的模块，必须按**原顺序**逐一创建并提取
 
 ---
 

@@ -156,7 +156,7 @@ Agent 自身维护迭代状态，编排 "生成 → 验证 → Conductor 分析"
 
 ```
 iteration = 0
-max_iterations = 5
+max_iterations = 20
 history_attempts = []
 previous_code = ""
 verifier_error = ""

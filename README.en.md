@@ -21,6 +21,7 @@
       - [**3.2 AscendC**](#32-ascendc)
       - [Scenario 1: Single Operator Generation (Lingxi-code Agent)](#scenario-1-single-operator-generation-lingxi-code-agent)
       - [Scenario 2: Batch Benchmark Evaluation (Ascend-Benchmark-Evaluator)](#scenario-2-batch-benchmark-evaluation-ascend-benchmark-evaluator)
+      - [Scenario 3: A5 Single Operator Generation (Preview) (ascendc-a5-op-gen Skill)](#scenario-3-a5-single-operator-generation-ascendc-a5-op-gen-skill)
     - [Evaluation Baseline](#evaluation-baseline)
       - [Triton](#triton)
       - [AscendC](#ascendc)
@@ -35,6 +36,7 @@
 | **Triton** | **Benchmark-Evaluator** | One-click batch evaluation | Execute specified Benchmark evaluation, automatically summarize and generate detailed reports |
 | **AscendC** | **Lingxi_code Agent** | AscendC single operator interactive generation | Code generation → Evaluation & Verification (Accuracy alignment & Performance testing) |
 | **AscendC** | **Ascend-Benchmark-Evaluator** | AscendC operator one-click batch evaluation | Execute specified Benchmark evaluation, automatically summarize and generate detailed reports |
+| **AscendC (A5)** | **ascendc-a5-op-gen** | A5 single operator generation and optimization (Preview) | Supports Benchmark / Op-gen / Optimize modes, automatically generates and optimizes AscendC SIMT/SIMD kernels |
 
 > **Shared Kernel**: AKG-Triton Agent and Benchmark-Evaluator share the underlying code generation Agent, uniformly handling the core workflow of "Code Generation → Verification → Performance Testing" to ensure consistency and high reusability of the generation logic.
 
@@ -286,6 +288,61 @@ bash utils/run_benchmark_ascendc.sh \
 - `--npu`: Single NPU device ID, e.g., 0 (default 0, mutually exclusive with `--npu-list`)
 - `--npu-list`: Multi-NPU list, comma-separated, e.g., `0,1,2,3,4,5` (mutually exclusive with `--npu`, higher priority)
 - `--output`: Output directory (required)
+
+---
+
+#### Scenario 3: A5 Single Operator Generation (Preview) (ascendc-a5-op-gen Skill)
+
+> **Note**: The A5 generation capability is currently in preview / testing phase. Generation quality and success rate are limited, and complex operators may require manual intervention.
+
+Suitable for quickly generating, verifying, and optimizing a single AscendC operator on A5 architecture. Supports three modes:
+- **Benchmark mode**: Automatically generate a kernel from an NPUKernelBench source file
+- **Op-gen mode**: Generate an AscendC implementation from any CUDA/PyTorch source file
+- **Optimize mode**: Optimize performance of an already archived kernel
+
+**Steps**:
+
+1. Configure the A5 Agent and skills in the AscendOpGenAgent directory:
+```bash
+mkdir -p .claude
+mkdir -p .claude/skills
+cp agents/ascend-a5-kernel-developer.md .claude/CLAUDE.md
+cp -r skills/ascendc/* .claude/skills/
+```
+
+2. Start Claude and enter the Skill command:
+
+**Benchmark mode** (generate from NPUKernelBench):
+```text
+/ascendc-a5-op-gen 13_Cat
+```
+
+**Op-gen mode** (generate from source file):
+```text
+/ascendc-a5-op-gen path/to/source.py
+```
+
+**Optimize mode** (optimize existing operator):
+```text
+/ascendc-a5-op-gen --optimize 12_Permute
+```
+
+**Execution Flow**:
+1. Automatically detect mode and create output directory (e.g., `output/npukernelbench/13_Cat`)
+2. Generate AscendC kernel files (`.h`, `.cpp`, `pybind11.cpp`, `model_new_ascendc.py`)
+3. Static check + compilation (up to 5 iterative fix rounds)
+4. Accuracy verification (all cases must PASS)
+5. Performance test and compute ratio (auto-enters optimization if below 0.6x)
+6. Output final report and `PROGRESS.md`
+
+After operator generation, you can use `a5-perf-summary` for unified performance summary and archiving:
+
+```text
+/a5-perf-summary 1_GELU    # single operator summary
+/a5-perf-summary all       # batch summary for all completed operators
+```
+
+This step automatically verifies accuracy, detects the kernel programming mode (SIMT / SIMD), computes performance ratios, and updates `benchmarks/NPUKernelBench/A5_RESULTS.md`.
 
 ### Evaluation Baseline
 

@@ -22,6 +22,7 @@
       - [**3.2 AscendC**](#32-ascendc)
       - [场景一：单算子生成 (Lingxi-code Agent)](#场景一单算子生成-lingxi-code-agent)
       - [场景二：Benchmark 批量评测 (Ascend-Benchmark-Evaluator)](#场景二benchmark-批量评测-ascend-benchmark-evaluator)
+      - [场景三：A5 单算子生成（预览版）(ascendc-a5-op-gen Skill)](#场景三a5-单算子生成-ascendc-a5-op-gen-skill)
     - [评测基线](#评测基线)
       - [Triton](#triton)
       - [AscendC](#ascendc)
@@ -37,6 +38,7 @@
 | **Triton**  | **AutoResearch** | 多轮迭代性能优化 | plan → edit → eval → keep/discard 闭环，Claude Code hook 强约束的阶段机 |
 | **AscendC** | **Lingxi_code Agent** | AscendC 单算子交互式生成 | 代码生成 → 评测验证（精度对齐与性能测试） |
 | **AscendC** | **Ascend-Benchmark-Evaluator** | AscendC 算子一键批量评测 | 执行指定 Benchmark 评测，自动总结并生成详细报告 |
+| **AscendC (A5)** | **ascendc-a5-op-gen** | A5 单算子生成与优化（预览版） | 支持 Benchmark / Op-gen / Optimize 三种模式，自动生成并优化 AscendC SIMT/SIMD kernel |
 
 >  **共享内核**：AKG-Triton Agent、Benchmark-Evaluator两者底层共用代码生成 Agent，统一处理“代码生成 → 验证 → 性能测试”的核心工作流，确保生成逻辑的一致性与高复用性。
 
@@ -323,6 +325,61 @@ bash utils/run_benchmark_ascendc.sh \
 - `--npu`: 单 NPU 设备 ID，如 0（默认 0，与 `--npu-list` 互斥）
 - `--npu-list`: 多 NPU 列表，逗号分隔，如 `0,1,2,3,4,5`（与 `--npu` 互斥，优先级更高）
 - `--output`: 输出目录（必填）
+
+---
+
+#### 场景三：A5 单算子生成（预览版）(ascendc-a5-op-gen Skill)
+
+> **注意**：A5 生成能力目前处于预览/测试阶段，生成质量和成功率有限，遇到复杂算子时可能需要人工介入调整。
+
+适用于在 A5 架构上快速生成、验证并优化单个 AscendC 算子。支持三种模式：
+- **Benchmark 模式**：从 NPUKernelBench 源文件自动生成 kernel
+- **Op-gen 模式**：从任意 CUDA/PyTorch 源文件生成 AscendC 实现
+- **Optimize 模式**：对已有归档 kernel 进行性能优化
+
+**操作步骤**：
+
+1. 在 AscendOpGenAgent 目录下配置 A5 Agent 和 skills：
+```bash
+mkdir -p .claude
+mkdir -p .claude/skills
+cp agents/ascend-a5-kernel-developer.md .claude/CLAUDE.md
+cp -r skills/ascendc/* .claude/skills/
+```
+
+2. 启动 Claude 并输入 Skill 命令：
+
+**Benchmark 模式**（从 NPUKernelBench 生成）：
+```text
+/ascendc-a5-op-gen 13_Cat
+```
+
+**Op-gen 模式**（从源文件生成）：
+```text
+/ascendc-a5-op-gen path/to/source.py
+```
+
+**Optimize 模式**（优化已有算子）：
+```text
+/ascendc-a5-op-gen --optimize 12_Permute
+```
+
+**执行流程**：
+1. 自动识别模式并创建输出目录（如 `output/npukernelbench/13_Cat`）
+2. 生成 AscendC kernel 文件（`.h`、`.cpp`、`pybind11.cpp`、`model_new_ascendc.py`）
+3. 静态检查 + 编译（最多 5 轮迭代修复）
+4. 精度验证（所有 case 必须 PASS）
+5. 性能测试并计算 ratio（低于 0.6x 时自动进入优化阶段）
+6. 输出最终报告和 `PROGRESS.md`
+
+算子生成完成后，可进一步使用 `a5-perf-summary` 进行统一的性能汇总与归档：
+
+```text
+/a5-perf-summary 1_GELU    # 单算子汇总
+/a5-perf-summary all       # 批量汇总所有已完成算子
+```
+
+该步骤会自动验证精度、检测 kernel 编程模式（SIMT / SIMD）、计算性能 ratio，并更新 `benchmarks/NPUKernelBench/A5_RESULTS.md`。
 
 ### 评测基线
 

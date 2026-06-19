@@ -99,9 +99,16 @@ def get_input_groups():
                     elif dtype_str == 'bool':
                         tensors[name] = (torch.rand(shape) > 0.5).to(torch.bool)
                     elif dtype_str in ('int32', 'int64', 'int8'):
-                        max_val = {'int32': 1000, 'int64': 10000, 'int8': 127}.get(dtype_str, 100)
+                        default_max = {'int32': 1000, 'int64': 10000, 'int8': 127}.get(dtype_str, 100)
+                        # Allow per-case `range: [lo, hi]` (INCLUSIVE on both ends) to bound
+                        # int tensor semantically. For indices into another tensor axis (e.g.
+                        # cache_position < max_seq), the un-bounded default would produce OOB
+                        # on NPU fancy-indexing → deterministic crash (AIV 334 BIU-to-VEC).
+                        # Default matches original behavior: `torch.randint(0, default_max)`
+                        # = inclusive `[0, default_max - 1]`.
+                        rng = inp.get('range', [0, default_max - 1])
                         dtype = {'float32': torch.float32, 'float16': torch.float16, 'bfloat16': torch.bfloat16, 'int32': torch.int32, 'int64': torch.int64, 'int8': torch.int8, 'bool': torch.bool}[dtype_str]
-                        tensors[name] = torch.randint(0, max_val, shape, dtype=dtype)
+                        tensors[name] = torch.randint(rng[0], rng[1] + 1, shape, dtype=dtype)
                     else:
                         dtype = {'float32': torch.float32, 'float16': torch.float16, 'bfloat16': torch.bfloat16, 'int32': torch.int32, 'int64': torch.int64, 'int8': torch.int8, 'bool': torch.bool}.get(dtype_str, torch.float32)
                         tensors[name] = torch.randn(shape, dtype=dtype)

@@ -250,7 +250,34 @@ c = a.to(tl.float32) // b.to(tl.float32)            # 转换float32类型
 d = a - (a // b) * b  # 公式转换
 ```
 
-### 8. atomic_* 标量操作 → atomic_* 向量操作
+### 8. 内存布局感知索引优化
+
+**适用场景**: kernel 中使用 `idx // stride` 和 `idx % stride` 将线性索引映射到多维坐标，且目标维度在内存中连续。
+
+**典型代码特征**:
+```python
+# 问题代码：通过 div/mod 重建多维坐标
+c_local = idx // (H * W)    # int 除法，标量降级
+hw = idx % (H * W)          # int 取余，标量降级
+h = hw // W                 # int 除法，标量降级
+w = hw % W                  # int 取余，标量降级
+x_offset = ((n * C + c) * H + h) * W + w
+```
+
+**优化方法**: 若内存布局允许，直接计算连续偏移：
+```python
+# 优化后：利用 NCHW 连续性，直接计算偏移
+base_c = g * channels_per_group
+base_offset = ((n * C + base_c) * H) * W
+val = tl.load(x_ptr + base_offset + idx, mask=mask, other=0.0)
+```
+
+**适用条件**:
+- 张量布局为 NCHW 或 NHWC
+- 同一 group/channel/instance 内的元素在内存中连续
+- 无需跨 stride 访问
+
+### 9. atomic_* 标量操作 → atomic_* 向量操作
 
 **原始代码（scalar 操作）**
 
@@ -279,7 +306,8 @@ tl.atomic_add(output_ptr + h_offs, block_vals)      # 向量化的原子加
 7. **标量比较类型转换**：对于 `int32` 和 `int64` 整数标量比较，先 .to(tl.float32) 再比较，以启用向量比较指令。
 8. **标量除法类型转换**：对于 `int32` 和 `int64` 中的整数除法操作，先 .to(tl.float32) 再计算，以启用向量计算指令。
 9. **标量取余类型转换**：对于 `int32` 和 `int64` 中的整数取余操作， 使用`a - (a // b) * b`的形式计算，以启用向量计算指令。
-10. **原子操作向量化**：对 `atomic_add` 这一类的 `atomic_*` 标量操作进行向量化，可消除循环的标量操作开销
+10. **内存布局感知索引优化**：对于 NCHW/NHWC 布局下通过 div/mod 重建多维坐标的场景，若目标维度内存连续，直接计算连续偏移以消除标量降级。
+11. **原子操作向量化**：对 `atomic_add` 这一类的 `atomic_*` 标量操作进行向量化，可消除循环的标量操作开销
 
 ## 性能收益
 

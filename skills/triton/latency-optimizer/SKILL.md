@@ -45,11 +45,15 @@ def kernel(A, B, C, M, N,
 1. 遍历 kernel 参数列表，排除明确属于运行时变量的参数：
   - 张量数据指针（如 input_ptr, output_ptr）
   - 动态维度（如 batch size M/N/K、序列长度 seq_len）
-  - 标量动态值（如缩放因子 scale，若每轮调用不同）
-2. 对剩余参数逐一检查是否满足"单次 kernel 启动后不变"：
-  - stride 参数（stride_am, stride_bn 等）→ 涉及 
+  - **仅在单次 kernel 执行期间变化**的标量动态值（如逐元素的缩放因子，每个 thread 的值都不同）
+2. 对剩余参数逐一检查是否满足"单次 kernel 启动后不变"（即该次 `kernel[grid](...)` 调用传入后，在整个 grid 执行期间不变）：
+  - stride 参数（stride_am, stride_bn 等）→ 涉及
   - 固定索引（如 lse_idx, head_idx_offset）→ 涉及
   - BLOCK_SIZE / HEAD_DIM / N_ROUNDED 等配置参数 → 涉及
+  - **启动级常量**（如 repeat 次数 `r`、操作轴 `axis`、reduce 维度 `dim`）→ **涉及**
+    - 此类参数虽然在 `forward()` 内的多次 `kernel[grid]()` 之间可能变化，但在**单次启动内固定**
+    - Triton Ascend 编译器会在每次启动时根据传入的 `constexpr` 值进行**启动级特化**（launch-level specialization），生成特化代码
+    - 典型收益：触发 `for i in range(r)` 等循环的编译期 unroll，消除标量循环开销
 3. 若第2步中任一参数未声明 `tl.constexpr` → 命中，进入参考文档
 4. 若第2步中无参数或已全部声明 `tl.constexpr` → 不涉及，跳过
 
@@ -409,7 +413,42 @@ for i in range(HEAD_NUM):
 
 ---
 
-### 优化点 12：Autotune 自动调优
+### 优化点 12：Grid 形状与多路径特化
+
+**适用条件**：单一 kernel 实现无法在不同 workload 规模下同时达到最优，且 Host 侧可在运行时根据 workload 特征选择不同 kernel 路径
+
+**典型代码特征**：
+```python
+# 特征 1：grid 被钳制到核数，导致小 workload 时调度开销占比高
+grid = (min(total_blocks, num_cores),)
+
+# 特征 2：kernel 内存在兼容大小 grid 的通用循环结构
+blocks_per_core = total_blocks // num_cores
+remainder = total_blocks % num_cores
+if pid < remainder:
+    my_blocks = blocks_per_core + 1
+    ...
+for block_idx in range(start_block, start_block + my_blocks):
+    ...  # 小 grid 时循环只执行 1 次，但分区计算无法消除
+
+# 特征 3：同一算子同时存在 total_blocks << num_cores 和 total_blocks >> num_cores 两种 workload
+```
+
+**判断逻辑**：
+1. 检查 grid 计算逻辑：是否存在 `min(total_blocks, num_cores)`、`clamp(grid, ...)` 等钳制逻辑
+2. 检查 kernel 内部：是否存在为了兼容“program 可能处理多 block”而引入的标量分区循环、分支判断
+3. 检查 workload 分布：同一算子在不同 shape 下是否同时出现以下两种场景：
+   - `total_blocks <= num_cores`（小 grid，每个 program 本可直接映射 1 个 block）
+   - `total_blocks > num_cores`（大 grid，必须进行多核分区）
+4. 如果以上任一成立 → 涉及
+
+**命中条件**：单一 kernel 无法同时最优覆盖小 grid 和大 grid 场景，且 Host 侧有条件做动态 dispatch
+
+**参考文档**：`references/grid-dispatch-specialization.md`
+
+---
+
+### 优化点 13：Autotune 自动调优
 
 **适用条件**：代码中存在一个或者多个可调参数（例如BLOCK_SIZE、BLOCK_M等），且这些参数未经过充分调优，考虑到其他优化点可能引入可调超参数，最后再优化该优化点
 
@@ -436,42 +475,106 @@ kernel[grid](..., BLOCK_M=128, BLOCK_N=128)
 
 ---
 
-### 优化点 13：消除冗余的边界运算
+### 优化点 14：混合策略自动选择
 
-**适用条件**：代码中存在 `tl.load(..., mask=m, other=d)` 加载数据后，后续纯算术运算链上又出现 `tl.where(m, ..., d)`、`* mask`、`+ 0`、`* 1` 等冗余边界保护运算
+**适用条件**：同一算子在不同 shape 或数据类型下需要不同优化策略
 
 **典型代码特征**：
 ```python
-# 特征 1：tl.where 二次归零
-x = tl.load(ptr + idx, mask=m, other=0.0)
-x_sq = x * x
-x_sq = tl.where(m, x_sq, 0.0)  # 冗余：load 已保证边界为 0
-
-# 特征 2：乘法模拟 mask
-a = tl.load(ptr_a + idx, mask=m, other=0.0)
-b = tl.load(ptr_b + idx, mask=m, other=0.0)
-x = (a + b) * m.to(tl.float32)  # 冗余：边界处 a+b 已是 0
+# 问题：单一策略无法覆盖所有 shape
+if some_condition:
+    # 策略 A: 适合小 shape
+    kernel_a[grid](...)
+else:
+    # 策略 B: 适合大 shape
+    kernel_b[grid](...)
 ```
 
 **判断逻辑**：
-- 检查是否存在 `tl.load(..., mask=m, other=d)` 或 `tl.full(d)` 作为数据源
-- 检查后续运算链是否为纯算术运算（`+ - * ** .to() exp abs max min sum` 等），不包括 `/ //`、store、控制流
-- 检查是否存在以下冗余运算：
-  - `tl.where(m, expr, d)`，且 `expr` 在 `m=False` 处的 KVR（已知值区域）可推导为 `d`
-  - `expr + 0.0`、`expr - 0.0`、`expr * 1.0`、`expr ** 1`、`-(-expr)` 等代数恒等式
-  - `tl.maximum(expr, d)` / `tl.minimum(expr, d)` / `tl.abs(expr)`，且 `expr` 已满足相应边界条件
-- 如果存在以上任一情况 → 涉及
-- 如果所有边界保护都是必要的（如运算链含除法、不同 mask、未受保护的 load） → 不涉及，跳过
+- 检查是否存在 shape 相关的条件分支选择不同 kernel
+- 检查是否存在数据类型相关的条件分支选择不同策略
+- 检查不同策略是否针对不同的性能瓶颈（如 small grid vs large grid）
+- 若存在 → 涉及
 
-**命中条件**：代码中存在由 KVR（Known-Value Region）数据流分析可证的冗余边界保护运算
+**参考策略**：
+- small batch / small groups → 并行规约（atomic_add）
+- large batch / large groups → 原始规约（避免 atomic 开销）
+- fp32 → 禁用改变求和顺序的优化
+- fp16/bf16 → 可启用并行优化
 
-**参考文档**：`references/redundant_boundary_operation.md`
+**命中条件**：代码中存在 shape 或数据类型相关的条件分支选择不同 kernel 或策略
+
+**参考文档**：`references/mixed_strategy.md`
+
+---
+
+### 优化点 14：维度合并与大 BLOCK 累加（归一化算子专用）
+
+**适用条件**：
+- 算子类型为 BatchNorm / LayerNorm / GroupNorm / InstanceNorm / RMSNorm / Softmax
+- 代码中存在对 stats unit（group / row / channel）内元素的归约操作
+- 当前实现使用嵌套循环或多通道分块累加
+
+**典型代码特征（问题模式）**：
+```python
+# 特征 1：嵌套循环处理连续维度
+for c in range(c_start, c_end):
+    for hw_block in range(0, L, BLOCK_HW):
+        vals = tl.load(x_ptr + idx, mask=mask, other=0.0)
+        sum_val += tl.sum(vals)  # 小量多次标量累加
+
+# 特征 2：mask 覆盖率过低
+BLOCK_HW = 256
+L = H * W  # 若 L=16，mask 覆盖率仅 6.25%
+
+# 特征 3：标量累加次数远大于向量化加载次数
+# 如：3584 次标量累加 vs 14 次向量化加载
+```
+
+**判断逻辑**：
+1. 检查 stats kernel 中是否存在嵌套循环处理连续维度
+2. 检查 `tl.load` 的 mask 覆盖率是否 < 50%
+3. 检查标量累加次数是否 > `max(16, total_elements / 4096)`
+4. 若任一条件满足 → 命中
+
+**优化动作**：
+1. 将 stats unit 内所有元素展平为一维连续块：
+   `group_elements = channels_per_group * HW`
+2. 基地址直接定位到 stats unit 起始：
+   `x_base = x_ptr + n * CHW + g * channels_per_group * HW`
+3. 使用单循环大 BLOCK 遍历：
+   ```python
+   for offset in range(0, group_elements, BLOCK_SIZE):
+       idx = offset + tl.arange(0, BLOCK_SIZE)
+       mask = idx < group_elements
+       val = tl.load(x_base + idx, mask=mask, other=0.0).to(tl.float32)
+       mean_acc += tl.sum(val, axis=0)
+       var_acc += tl.sum(val * val, axis=0)
+   ```
+4. BLOCK_SIZE 自适应选择：
+   | group_elements | fp32 | fp16/bf16 |
+   |---------------|------|-----------|
+   | < 1024 | 向上取整到 2^n | 向上取整到 2^n |
+   | 1024 ~ 8191 | 1024 | 1024 |
+   | 8192 ~ 32767 | 1024 | 2048 |
+   | >= 32768 | 1024 | 4096 |
+
+**预期收益**：
+- 性能：减少循环开销，提高向量利用率，减少 mask 浪费
+- 精度：减少标量累加次数（从数千次降到十几次），避免 float16 累积误差
+- 典型提升：0.3x → 0.8x（同时解决精度失败）
+
+**验证要求**：
+- 精度验证必须通过（特别关注 `num_groups=1, C` 很大、`HW` 很小的 case）
+- 性能不劣化
+
+**参考文档**：`../kernel-generator/references/triton-ascend-reduce.md`（"Stats Kernel 精度保障：累加模式规范"章节）
 
 ---
 
 ## 优化流程
 ```
-1. 按顺序检查优化点 1 → 2 → 3 → ... → 13
+1. 按顺序检查优化点 1 → 2 → 3 → ... → 13 → 14
 2. 对于当前优化点，先判断是否命中（代码特征满足 + 适用条件成立）：
    - 未命中 → 跳过，检查下一优化点
    - 命中 → 参考对应文档，应用优化策略
@@ -527,7 +630,8 @@ x = (a + b) * m.to(tl.float32)  # 冗余：边界处 a+b 已是 0
 | Libdevice 函数使用 | `references/libdevice-usage.md` |
 | 循环不变量外提 | `references/loop-invariant-hoisting.md` |
 | Load 指令重排序 | `references/load-order.md` |
+| Grid 形状与多路径特化 | `references/grid-dispatch-specialization.md` |
 | Autotune 自动调优 | `references/autotune.md` |
-| 消除冗余的边界运算 | `references/redundant_boundary_operation.md` |
-| Ascend Pooling 系统性优化 | `references/ascend-pooling-optimization.md` |
+| 混合策略自动选择 | `references/mixed_strategy.md` |
+| 维度合并与大 BLOCK 累加 | `../kernel-generator/references/triton-ascend-reduce.md` |
 | 代码规范检查 | `references/checklist.md` |

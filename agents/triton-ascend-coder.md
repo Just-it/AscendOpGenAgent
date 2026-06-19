@@ -138,9 +138,21 @@ python3 -c "import datetime,random; ts=datetime.datetime.now().strftime('%Y%m%d_
 
 调用 `kernel-designer` skill，设计算法草图。
 
+**前置检查**：
+1. 检查 `.claude/memory/kernel-opt-{category}.md` 是否存在。若存在，skill 调用方必须确保该文件被 skill 加载（通过显式传入路径或 skill 自动发现）。
+2. 若该文件存在，其 Layer 1 约束视为本次草图设计的**硬性边界**。
+
 **传入**：`op_name`、`task_desc`（任务文件完整内容）、`arch`、`user_requirements`（如有）。
 
 **产出**：`{工作目录}/sketch.txt`。
+
+**Layer 1 合规检查门（强制）**：
+- sketch 产出后，Agent 必须读取 `kernel-opt-{category}.md` 的 Layer 1 约束，逐条核对 `sketch.txt` 是否兼容。
+- 若发现冲突（如 Layer 1 禁止单 kernel 展平但草图设计为 flat-kernel；Layer 1 要求逐维度处理但草图无维度循环等），**视为 A 类错误**，必须：
+  1. 不进入 Phase 3
+  2. 将冲突点作为 `conductor_suggestion` 反馈给 `kernel-designer`
+  3. 重新执行 Phase 2，直到草图与 Layer 1 兼容
+- 该检查门最多重试 2 次，若仍无法通过，终止任务并报告"草图架构与历史 Layer 1 约束持续冲突"。
 
 仅执行一次，后续 Phase 3 迭代不再重新设计草图。
 
@@ -331,11 +343,20 @@ while iteration < max_iterations:
 
 ```
 opt_iteration = 0
+# max_opt_iterations 动态计算指令：
+# Agent 必须在 Phase 4 开始时执行以下步骤：
+# 1. 使用 Read 工具读取 .claude/skills/latency-optimizer/SKILL.md
+# 2. 统计文本中 "### 优化点" 出现的次数（即为优化点个数）
+# 3. 计算 max_opt_iterations = 优化点个数 + 1
+# 4. 若读取失败、文件不存在或统计失败，使用默认值 max_opt_iterations = 20
+max_opt_iterations = <由 Agent 按上述指令运行时计算>
+target_speedup = 0.8             # 目标几何平均加速比
 best_code = ""
 best_speedup = 0.0
 baseline_code = Phase 3 产出的 generated_code.py
 phase3_last_iter = Phase 3 最后一次验证通过的 iter 编号  # 见 3.3 的记录
 improvement_made = false
+target_reached = false           # 是否达到目标加速比
 ```
 
 ### Phase 4 入口硬断言（强制）
@@ -360,7 +381,7 @@ improvement_made = false
 ### 迭代循环
 
 ```
-while True:
+while opt_iteration < max_opt_iterations:
 
     ── 4.1 代码分析 + 优化策略 + 代码重写 ────────────
     调用 latency-optimizer skill
@@ -453,14 +474,21 @@ while True:
     - 若 `baseline_speedup` 或 `optimized_speedup` 任一为 `null`（全部 shape 异常，
       无几何平均可算），直接判定为优化失败（拒绝优化），跳到 4.5 A 类分析。
 
+    optimized_speedup >= target_speedup:
+      → 达到目标加速比，优化成功
+      → 更新 best_code / best_speedup
+      → improvement_made = true
+      → target_reached = true
+      → break（直接退出循环）
+
     optimized_speedup > baseline_speedup:
-      → 优化成功（几何平均加速比有提升）
+      → 有提升但未达目标
       → 更新 best_code / best_speedup
       → improvement_made = true
       → opt_iteration++，continue
 
     否则（含相等）:
-      → 视为无提升，opt_iteration++，continue
+      → 无提升，opt_iteration++，continue
 
     ── 4.5 分析决策 (验证失败时) ─────────────────────
     A 类 (优化引入逻辑错误) → 回退，调整策略，continue
@@ -471,13 +499,16 @@ while True:
     continue
 
     ── 4.6 终局判定 ──────────────────────────────────
-    无优化点时退出判定：
+    循环退出后的终局判定：
+
+    target_reached == true:
+      → 达到目标加速比，优化成功，进入 Phase 5
 
     improvement_made == true:
-      → 优化成功，break，进入 Phase 5
+      → 有提升但未达目标（迭代耗尽），进入 Phase 5
 
-    improvement_made == false:
-      → 优化失败（做完所有尝试后没有效果），break，进入 Phase 5
+    improvement_made == false 且 opt_iteration >= max_opt_iterations:
+      → 优化失败（无提升，且迭代次数耗尽），进入 Phase 5
 ```
 
 ### Phase 4 终局处理
@@ -584,6 +615,8 @@ while True:
 **写入 `{工作目录}/report.md`**：
 - 基本信息：arch、工作目录
 - 生成结果：迭代次数、最终版本来源
+- **目标加速比**：target_speedup = 0.8，是否达到（target_reached）
+- **实际最佳加速比**：best_speedup（保留 4 位小数）
 - **Shape 通过率（以 verify 为准）**：`passed_cases / total_cases` 必须从
   `output/iter_{phase3_last_iter}/verify/verify_result.json` 读取。
   ⚠️ **禁止**从 `perf_result.json` 取 passed_cases —— 后者是"benchmark exec 成功数"
@@ -623,6 +656,9 @@ while True:
   "gen_iterations": 2,
   "opt_iterations": 1,
   "optimized": true,
+  "target_speedup": 0.8,
+  "target_reached": true,
+  "best_speedup": 0.85,
   "perf_method": "profiler",
   "skill_path": ".claude/skills/kernel-verifier",
   "perf_data": {
@@ -647,6 +683,9 @@ while True:
 ```
 
 **字段说明**：
+- `target_speedup`: 目标几何平均加速比，固定为 0.8
+- `target_reached`: 是否达到目标加速比（optimized_speedup >= target_speedup）
+- `best_speedup`: Phase 4 历史最佳几何平均加速比
 - `speedup_vs_torch`: **几何平均**聚合 = `(∏ s_i)^(1/n)`（仅对通过且 `s_i` 为有限正数的 shape）；全部异常时为 `null`
 - `speedup_vs_baseline`: Phase 4 时 = `optimized.speedup_vs_torch / baseline.speedup_vs_torch`（两个几何平均之比）
 - `passed_cases` / `failed_cases`: 多 shape 时的通过 / 失败计数（策略 A 成功时应为 total / 0）
@@ -709,13 +748,35 @@ Phase 4 入口断言失败（Phase 3 闸门被违反）：
 }
 ```
 
-Phase 4 失败时（Phase 3 成功，优化未成功）：
+Phase 4 有提升但未达目标时：
 ```json
 {
   "success": true,
   "gen_iterations": 2,
-  "opt_iterations": 3,
+  "opt_iterations": 10,
+  "optimized": true,
+  "target_speedup": 0.8,
+  "target_reached": false,
+  "best_speedup": 0.65,
+  "perf_method": "profiler",
+  "skill_path": ".claude/skills/kernel-verifier",
+  "perf_data": {
+    "avg_latency_ms": 0.8000,
+    "speedup_vs_torch": 1.5000
+  }
+}
+```
+
+Phase 4 失败时（Phase 3 成功，优化无提升）：
+```json
+{
+  "success": true,
+  "gen_iterations": 2,
+  "opt_iterations": 10,
   "optimized": false,
+  "target_speedup": 0.8,
+  "target_reached": false,
+  "best_speedup": 0.0,
   "perf_data": {
     "avg_latency_ms": 0.8000,
     "speedup_vs_torch": 1.5000
@@ -839,7 +900,7 @@ agent 收到 exit 2 时，必须按下表把它**等价映射**到对应 verify 
 | GPU Kernel 模式 | `.pt` 必须与 `.py` 同名同目录；`vllm_gpu_perf.csv` 向上查找最多 3 级 |
 | Phase 3 单一 Kernel | Phase 3 必须且只能生成一个泛用 Kernel，禁止生成多个 Kernel 或调度器 |
 | Phase 3 最大迭代 | 5 次，禁止超出 |
-| Phase 4 迭代策略 | 不做最大迭代次数限制，直到 latency-optimizer 报告无更多优化点则退出 |
+| Phase 4 迭代策略 | max_opt_iterations = latency-optimizer 优化点个数 + 1，达到上限后，或者直到 latency-optimizer 报告无更多优化点则退出 |
 | Phase 4 成功底线 | 性能不劣化（speedup_vs_baseline ≥ 1.0） |
 | Phase 4 退出判定 | 有效果（speedup_vs_baseline ≥ 1.0）则成功；做完所有尝试后无效果则失败 |
 | Phase 4 基线复用 | 4.2/4.3 的基线侧 verify_result_baseline.json 和 baseline_perf_result.json 必须从 Phase 3 iter_{phase3_last_iter} 复制，禁止对基线代码重跑 verify.py 或 benchmark.py（基线代码与 Phase 3 generated_code.py 完全一致，重复执行只浪费时间） |
@@ -861,3 +922,82 @@ agent 收到 exit 2 时，必须按下表把它**等价映射**到对应 verify 
 - 专业、技术、简洁
 - 每完成一个 Phase 提供一行状态更新
 - 错误时清晰描述 + 建议操作
+
+---
+
+## Phase 7: 经验提炼与归档（算子探索成功后强制执行）
+
+⚠️ **本阶段为跨会话复用保障的关键闭环**。算子任务完成后，必须将验证过的设计决策和性能数据沉淀到项目级 memory，供后续同类算子复用。
+
+### 触发条件
+
+必须同时满足：
+1. `summary.json` 中 `"success": true`
+2. `passed_cases == total_cases > 0`
+3. `speedup_vs_torch` 为有限正数（几何平均有效）
+
+### 执行步骤
+
+**Step 1: 人工提炼 Layer 1-3（Agent 必须完成）**
+
+从本次探索中提取可复用经验，按**四层隔离模型**写入对应类别文件：
+
+- **Layer 1（设计约束）**：硬性必须遵守的规则（如 "constant 模式必须拆分为 fill + copy"）
+- **Layer 2（算法骨架）**：核心并行策略的抽象描述（如 grid 分配模式、分支决策树）
+- **Layer 3（关键技巧）**：5-15 行已验证有效的代码片段，标注"可替代方向"
+
+目标文件：`.claude/memory/kernel-opt-{category}.md`
+
+若该算子类别**首次归档**，先初始化经验文件模板：
+```bash
+python3 utils/exp-init.py {category} --op-name {op_name}
+```
+
+**Step 2: 物理归档 Layer 4（自动工具）**
+
+运行归档命令：
+```bash
+python3 utils/exp-archive.py {work_dir} --create-experience
+```
+
+该命令自动完成：
+- 校验归档条件（success、精度全过、加速比有效）
+- 复制 `{op_name}_generated.py` → `archive/{category}/{category}_v{N}_{date}.py`
+- 复制 `report.md` → `archive/{category}/{category}_v{N}_{date}_report.md`
+- 复制 `summary.json` → `archive/{category}/{category}_v{N}_{date}_summary.json`
+- 版本号 N 按 archive 目录已有版本自动递增
+- 更新 `MEMORY.md` 索引
+- `--create-experience` 若该类别尚无经验文件，自动基于模板创建
+
+**Step 3: 规范验证（强制）**
+
+运行检查命令：
+```bash
+python3 utils/exp-check.py
+```
+
+要求：**0 失败、0 警告**。任何失败项必须在结束会话前修复。
+
+### 四层隔离复用规则（跨会话）
+
+| 层级 | 内容 | 受众 | 访问规则 |
+|------|------|------|---------|
+| Layer 1 | 设计约束、禁止事项 | `kernel-designer` | 必须作为 negative_prompt 遵守 |
+| Layer 2 | 算法骨架、并行策略 | `kernel-designer` | 仅作参考方向，输出必须是全新草图 |
+| Layer 3 | 关键代码片段 | `kernel-generator` / `latency-optimizer` | 技巧可参考但不可复制，变量名/结构必须重新设计 |
+| Layer 4 | 完整历史代码路径 | **默认对 Agent 不可见** | 仅在用户明确指令对比时才可读取 |
+
+### 关键保障机制
+
+1. **统一存储**：所有经验文件位于项目根目录 `.claude/memory/` 下，**所有会话共享同一套 memory**
+2. **自动发现**：`kernel-designer` skill 在 Phase 2 必须查询并读取对应类别的 `kernel-opt-{category}.md`（仅 Layer 1-3）
+3. **防复制**：Prompt 中必须包含"历史经验仅供启发，禁止直接复制代码结构"
+4. **多样性保护**：若新实现采用与历史完全不同的思路且通过验证，将该思路**并列记录**到经验文件，而非覆盖旧经验
+
+### 失败处理
+
+| 场景 | 处理 |
+|------|------|
+| summary.json 不满足归档条件 | 禁止归档，在 report.md 中标注"未达归档标准" |
+| exp-check.py 报告失败 | 必须修复失败项后方可结束会话 |
+| 经验文件已存在 | `exp-archive.py` 仅更新 MEMORY.md 和 archive；Layer 1-3 由 Agent 手动追加到已有经验文件 |

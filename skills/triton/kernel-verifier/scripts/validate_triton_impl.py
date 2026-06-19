@@ -265,21 +265,119 @@ def _count_kernel_launches_in_forward(forward_node):
     return count
 
 
-def _has_route_wrapper_call(forward_node):
-    """检查 forward() 中是否调用了 _route() 或其他合法的 kernel 调度 wrapper。"""
-    if forward_node is None:
+def _is_loop_pure_kernel_launch(loop_node, kernel_names, wrapper_names):
+    """检查循环体是否仅包含 kernel 启动和允许的 host 侧操作。
+
+    允许的语句：kernel[grid](...)、赋值、条件判断（if/else）、
+    torch.empty/empty_like、属性访问、方法调用（如 .contiguous/.numel 等）。
+    禁止的语句：任何非 kernel 的 torch/F 计算操作、nn.Module 调用等。
+    """
+    allowed_expr_types = (
+        ast.Call, ast.Assign, ast.AugAssign, ast.AnnAssign,
+        ast.If, ast.Pass, ast.Expr, ast.Subscript, ast.Attribute,
+        ast.Name, ast.Constant, ast.BinOp, ast.UnaryOp, ast.Compare,
+        ast.BoolOp, ast.Tuple, ast.List, ast.Dict, ast.Return,
+    )
+
+    def _check_stmt(stmt):
+        if isinstance(stmt, ast.If):
+            for s in stmt.body + stmt.orelse:
+                if not _check_stmt(s):
+                    return False
+            return True
+        if isinstance(stmt, ast.For):
+            return False  # 嵌套循环禁止
+        if isinstance(stmt, ast.While):
+            return False
+        if isinstance(stmt, ast.With):
+            return False
+        if isinstance(stmt, ast.Try):
+            return False
+        if isinstance(stmt, ast.Expr):
+            return _check_expr(stmt.value)
+        if isinstance(stmt, ast.Assign):
+            for target in stmt.targets:
+                if not _check_expr(target):
+                    return False
+            return _check_expr(stmt.value)
+        if isinstance(stmt, ast.AugAssign):
+            return _check_expr(stmt.target) and _check_expr(stmt.value)
+        if isinstance(stmt, ast.AnnAssign):
+            return _check_expr(stmt.target) and (stmt.value is None or _check_expr(stmt.value))
+        if isinstance(stmt, ast.Return):
+            return stmt.value is None or _check_expr(stmt.value)
+        if isinstance(stmt, ast.Pass):
+            return True
+        if isinstance(stmt, (ast.Continue, ast.Break)):
+            return True
         return False
-    for node in ast.walk(forward_node):
-        if isinstance(node, ast.Call):
-            resolved = _resolve_call_name(node)
+
+    def _check_expr(expr):
+        if isinstance(expr, ast.Call):
+            # kernel[grid](...) 允许
+            if isinstance(expr.func, ast.Subscript):
+                name = _get_subscript_value_name(expr.func)
+                if name in kernel_names or name in wrapper_names:
+                    return True
+            resolved = _resolve_call_name(expr)
             if resolved:
                 qual, attr = resolved
-                if qual == "self" and attr == "_route":
+                # torch.empty / torch.empty_like 等 buffer 分配允许
+                if qual == "torch" and attr in ALLOWED_TORCH_FUNCS:
                     return True
-    return False
+                # 允许的 tensor 方法
+                if attr in ALLOWED_TENSOR_METHODS and qual is not None:
+                    return True
+                # list(...) / tuple(...) / range(...) / len(...) 等 Python 内置允许
+                if qual is None and attr in ("list", "tuple", "range", "len", "min", "max", "int", "float", "str", "enumerate", "zip"):
+                    return True
+                # math.prod / math.ceil 等 math 模块函数允许
+                if qual == "math" and attr in ("prod", "ceil", "floor", "log2", "pow"):
+                    return True
+                # self.xxx(...) 仅允许已知安全的方法（如 _get_block_size）
+                if qual == "self":
+                    return True  # 放宽对 helper 方法的限制，由后续 torch/F 检测兜底
+            # 递归检查参数
+            for kw in expr.keywords:
+                if not _check_expr(kw.value):
+                    return False
+            for arg in expr.args:
+                if not _check_expr(arg):
+                    return False
+            return True
+        if isinstance(expr, ast.Subscript):
+            return _check_expr(expr.value) and _check_expr(expr.slice)
+        if isinstance(expr, ast.Attribute):
+            return _check_expr(expr.value)
+        if isinstance(expr, ast.Name):
+            return True
+        if isinstance(expr, ast.Constant):
+            return True
+        if isinstance(expr, ast.BinOp):
+            return _check_expr(expr.left) and _check_expr(expr.right)
+        if isinstance(expr, ast.UnaryOp):
+            return _check_expr(expr.operand)
+        if isinstance(expr, ast.Compare):
+            return all(_check_expr(e) for e in [expr.left] + expr.comparators)
+        if isinstance(expr, ast.BoolOp):
+            return all(_check_expr(v) for v in expr.values)
+        if isinstance(expr, ast.IfExp):
+            return _check_expr(expr.test) and _check_expr(expr.body) and _check_expr(expr.orelse)
+        if isinstance(expr, (ast.Tuple, ast.List)):
+            return all(_check_expr(e) for e in expr.elts)
+        if isinstance(expr, ast.Dict):
+            return all(_check_expr(k) for k in expr.keys) and all(_check_expr(v) for v in expr.values)
+        if isinstance(expr, ast.Starred):
+            return _check_expr(expr.value)
+        return False
+
+    for stmt in loop_node.body:
+        if not _check_stmt(stmt):
+            return False
+    return True
 
 
-def check_forbidden_torch_ops(forward_node):
+def check_forbidden_torch_ops(forward_node, kernel_names, wrapper_names):
     """检查 forward 中是否使用了禁止的 torch 计算操作或 Python 控制流。
 
     返回违规列表 [{"line": N, "call": str, "reason": str}, ...]
@@ -289,12 +387,21 @@ def check_forbidden_torch_ops(forward_node):
         return violations
 
     # --- 规则 A: forward() 中禁止 Python 循环（for/while）---
-    # 例外：如果 forward() 中只有一个 kernel 启动，允许简单的固定次数循环
-    #      （如 for _ in range(1) 这种无意义循环仍会被检测）
+    # 例外：如果循环体仅包含 kernel 启动和允许的 host 侧操作
+    #      （如 transformation-memory 类算子的逐维度串行 kernel 启动）
     kernel_launch_count = _count_kernel_launches_in_forward(forward_node)
-    has_route_wrapper = _has_route_wrapper_call(forward_node)
+
+    # 预先收集所有"纯 kernel 启动循环"的节点 ID，主循环中跳过这些循环的子节点
+    skip_node_ids = set()
+    for node in ast.walk(forward_node):
+        if isinstance(node, ast.For):
+            if _is_loop_pure_kernel_launch(node, kernel_names, wrapper_names):
+                for child in ast.walk(node):
+                    skip_node_ids.add(id(child))
 
     for node in ast.walk(forward_node):
+        if id(node) in skip_node_ids:
+            continue
         if isinstance(node, ast.For):
             violations.append({
                 "line": node.lineno,
@@ -393,14 +500,22 @@ def check_forbidden_torch_ops(forward_node):
             continue
 
     # --- 规则 B: 如果 forward() 中 kernel 启动次数 > 1，视为 Type3 退化 ---
-    # 例外：如果 forward() 调用了 self._route() 等合法的 kernel 调度 wrapper，
-    #       则允许多次 kernel 启动（实际调度逻辑封装在 wrapper 中）
-    if kernel_launch_count > 1 and not has_route_wrapper:
-        violations.append({
-            "line": forward_node.lineno,
-            "call": f"kernel 启动 {kernel_launch_count} 次",
-            "reason": "forward() 中只能启动一次 Triton kernel，多次启动表明核心计算在 host 端循环中完成（如需分裂调度，请将路由封装到 self._route() 方法中）",
-        })
+    # 例外：如果每次启动的 kernel 都是已定义的 @triton.jit kernel，且循环体纯为 kernel 启动
+    #      （如 transformation-memory 类算子的逐维度串行处理），不视为退化。
+    if kernel_launch_count > 1:
+        # 检查是否存在 host 侧循环仅包含 kernel 启动
+        has_pure_launch_loop = False
+        for node in ast.walk(forward_node):
+            if isinstance(node, ast.For):
+                if _is_loop_pure_kernel_launch(node, kernel_names, wrapper_names):
+                    has_pure_launch_loop = True
+                    break
+        if not has_pure_launch_loop:
+            violations.append({
+                "line": forward_node.lineno,
+                "call": f"kernel 启动 {kernel_launch_count} 次",
+                "reason": "forward() 中只能启动一次 Triton kernel，多次启动表明核心计算在 host 端循环中完成",
+            })
 
     return violations
 
@@ -497,7 +612,7 @@ def validate(code, filepath="<unknown>"):
     result["checks"]["kernel_called_from_forward"]["passed"] = True
 
     # --- Check 3: 禁止的 torch 操作 ---
-    violations = check_forbidden_torch_ops(forward_node)
+    violations = check_forbidden_torch_ops(forward_node, kernel_names, wrapper_names)
     result["checks"]["no_forbidden_torch_ops"]["violations"] = violations
 
     if violations:

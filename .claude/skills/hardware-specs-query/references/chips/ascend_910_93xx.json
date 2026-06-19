@@ -1,0 +1,190 @@
+{
+  "chip_series": "Ascend 910_93xx",
+  "description": "Ascend 910_93xx 系列芯片硬件规格参数，与 910B Gen2 同架构（AIC-C-220），数据来源: platform_config/Ascend910_93*.ini",
+  "data_source": "platform_config/Ascend910_93*.ini",
+
+  "shared": {
+    "_comment": "910_93xx 与 910B Gen2 共享相同的 AI Core 架构（AIC-C-220, NpuArch=2201）",
+
+    "ai_core_architecture": {
+      "core_type": "AI Core",
+      "cube_vector_combine": "split",
+      "core_type_list": ["CubeCore", "VectorCore"],
+      "ai_cpu_cnt": 6,
+      "note": "与 910B Gen2 相同的拆分核架构"
+    },
+
+    "vector_unit": {
+      "vec_calc_size_bytes": 128,
+      "fp16_elements_per_instruction": 64,
+      "fp32_elements_per_instruction": 32
+    },
+
+    "cube_unit": {
+      "cube_m_size": 16,
+      "cube_n_size": 16,
+      "cube_k_size": 16
+    },
+
+    "memory": {
+      "ub": {
+        "size_bytes": 196608,
+        "size_readable": "192KB",
+        "ubblock_size": 32,
+        "ubbank_size": 4096,
+        "ubbank_num": 64,
+        "ubbank_group_num": 16,
+        "ubburst_in_one_block": 32
+      },
+      "l0a": { "size_bytes": 65536, "size_readable": "64KB" },
+      "l0b": { "size_bytes": 65536, "size_readable": "64KB" },
+      "l0c": { "size_bytes": 131072, "size_readable": "128KB" },
+      "l1": { "size_bytes": 524288, "size_readable": "512KB" }
+    },
+
+    "memory_rates": {
+      "_comment": "单位: Bytes/cycle, 与 910B Gen2 完全相同",
+      "ddr_rate": 32,
+      "ddr_read_rate": 32,
+      "ddr_write_rate": 32,
+      "l2_rate": 110,
+      "l2_read_rate": 110,
+      "l2_write_rate": 86,
+      "l1_to_l0_a_rate": 512,
+      "l1_to_l0_b_rate": 256,
+      "l1_to_ub_rate": 128,
+      "l0_c_to_ub_rate": 256,
+      "ub_to_l2_rate": 64,
+      "ub_to_ddr_rate": 64,
+      "ub_to_l1_rate": 128
+    },
+
+    "alignment": {
+      "base_alignment_bytes": 32,
+      "block_size_elements": {
+        "fp16": 16,
+        "bf16": 16,
+        "fp32": 8,
+        "int8": 32,
+        "int16": 16,
+        "int32": 8
+      }
+    },
+
+    "features": {
+      "support_bf16": true,
+      "support_inf_nan": true,
+      "support_fixpipe": true,
+      "sparsity": true,
+      "ffts_mode": "ffts-plus",
+      "hardware_sync_betweencore": true
+    },
+
+    "unzip": {
+      "engines": 4,
+      "max_ratios": 64,
+      "channels": 2
+    }
+  },
+
+  "variants": {
+    "_comment": "各子型号差异参数",
+
+    "910_9362": {
+      "arch_type": 4,
+      "npu_arch": 2201,
+      "aic_version": "AIC-C-220",
+      "ai_core_cnt": 20,
+      "cube_core_cnt": 20,
+      "vector_core_cnt": 40,
+      "cube_freq_mhz": 1500,
+      "l2_size_bytes": 176160768,
+      "l2_size_readable": "168MB",
+      "gm_size_bytes": 34359738368,
+      "gm_size_readable": "32GB"
+    },
+
+    "910_9372": {
+      "arch_type": 4,
+      "npu_arch": 2201,
+      "aic_version": "AIC-C-220",
+      "ai_core_cnt": 20,
+      "cube_core_cnt": 20,
+      "vector_core_cnt": 40,
+      "cube_freq_mhz": 1800,
+      "l2_size_bytes": 201326592,
+      "l2_size_readable": "192MB",
+      "gm_size_bytes": 68719476736,
+      "gm_size_readable": "64GB"
+    },
+
+    "910_9381": {
+      "arch_type": 4,
+      "npu_arch": 2201,
+      "aic_version": "AIC-C-220",
+      "ai_core_cnt": 24,
+      "cube_core_cnt": 24,
+      "vector_core_cnt": 48,
+      "cube_freq_mhz": 1800,
+      "l2_size_bytes": 201326592,
+      "l2_size_readable": "192MB",
+      "gm_size_bytes": 68719476736,
+      "gm_size_readable": "64GB"
+    },
+
+    "910_9382": {
+      "arch_type": 4,
+      "npu_arch": 2201,
+      "aic_version": "AIC-C-220",
+      "ai_core_cnt": 24,
+      "cube_core_cnt": 24,
+      "vector_core_cnt": 48,
+      "cube_freq_mhz": 1800,
+      "l2_size_bytes": 201326592,
+      "l2_size_readable": "192MB",
+      "gm_size_bytes": 68719476736,
+      "gm_size_readable": "64GB"
+    },
+
+    "910_9391": {
+      "arch_type": 4,
+      "npu_arch": 2201,
+      "aic_version": "AIC-C-220",
+      "ai_core_cnt": 24,
+      "cube_core_cnt": 24,
+      "vector_core_cnt": 48,
+      "cube_freq_mhz": 1850,
+      "l2_size_bytes": 201326592,
+      "l2_size_readable": "192MB",
+      "gm_size_bytes": 68719476736,
+      "gm_size_readable": "64GB"
+    },
+
+    "910_9392": {
+      "arch_type": 4,
+      "npu_arch": 2201,
+      "aic_version": "AIC-C-220",
+      "ai_core_cnt": 24,
+      "cube_core_cnt": 24,
+      "vector_core_cnt": 48,
+      "cube_freq_mhz": 1850,
+      "l2_size_bytes": 201326592,
+      "l2_size_readable": "192MB",
+      "gm_size_bytes": 68719476736,
+      "gm_size_readable": "64GB"
+    }
+  },
+
+  "derived_params": {
+    "calculation_notes": {
+      "bandwidth_per_core_gbps": "rate (Bytes/cycle) x freq (MHz) / 1000 = GB/s",
+      "cube_fp16_tflops_per_core": "16x16x16 x 2 x freq / 1e6 = TFLOPS/core"
+    },
+    "examples": {
+      "9391_cube_fp16_tflops_per_core": "16x16x16 x 2 x 1850 / 1e6 = 15.155 TFLOPS",
+      "9391_cube_fp16_aggregate_tflops": "15.155 x 24 = 363.724 TFLOPS"
+    }
+  },
+
+  "lookup_rule": "检测芯片型号 -> 读 shared 获取通用参数 -> 读 variants[型号] 获取核数/频率/容量 -> 用 derived_params 公式计算带宽和算力；注意本系列与 910B Gen2 架构完全兼容"
+}

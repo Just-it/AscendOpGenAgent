@@ -1,0 +1,71 @@
+{
+  "chip_series": "SD3403",
+  "description": "SD3403 芯片硬件规格参数（嵌入式 NPU）",
+
+  "shared": {
+    "ai_core_architecture": {
+      "core_type": "AI Core",
+      "core_type_list": ["AICore"],
+      "ai_core_cnt": 1,
+      "vector_core_cnt": 0,
+      "note": "统一核架构, 单核, 与 Hi3796CV300CS 同架构 (AIC-L-202)"
+    },
+
+    "vector_unit": { "vec_calc_size_bytes": 128 },
+
+    "cube_unit": {
+      "cube_m_size": 16,
+      "cube_n_size": 8,
+      "cube_k_size": 16,
+      "note": "16x8x16 矩阵乘单元"
+    },
+
+    "memory": {
+      "ub": {
+        "size_bytes": 196608,
+        "size_readable": "192KB",
+        "ubblock_size": 32,
+        "ubbank_size": 4096,
+        "ubbank_num": 48,
+        "ubbank_group_num": 16
+      },
+      "l0a": { "size_bytes": 32768, "size_readable": "32KB" },
+      "l0b": { "size_bytes": 32768, "size_readable": "32KB" },
+      "l0c": { "size_bytes": 131072, "size_readable": "128KB" },
+      "l1": { "size_bytes": 1048576, "size_readable": "1MB" },
+      "l2": { "size_bytes": 0, "note": "无 L2" }
+    },
+
+    "memory_rates": {
+      "ddr_rate": 21,
+      "ddr_read_rate": 21,
+      "ddr_write_rate": 21,
+      "l1_to_l0_a_rate": 512,
+      "l1_to_l0_b_rate": 256,
+      "l1_to_ub_rate": 128,
+      "l0_c_to_ub_rate": 512,
+      "ub_to_ddr_rate": 18,
+      "ub_to_l1_rate": 256,
+      "l2_rate": null,
+      "note": "无 L2, l2_rate 不适用"
+    },
+
+    "unzip": {
+      "engines": 1,
+      "max_ratios": 64,
+      "channels": 4
+    }
+  },
+
+  "variants": {
+    "SD3403": {
+      "arch_type": 13,
+      "aic_version": "AIC-L-202",
+      "cube_freq_mhz": 594,
+      "gm_size_bytes": null,
+      "gm_size_readable": "unknown"
+    }
+  },
+
+  "lookup_rule": "单型号芯片, 直接读 shared 获取全部参数"
+}

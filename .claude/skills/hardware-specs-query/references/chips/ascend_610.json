@@ -1,0 +1,108 @@
+{
+  "chip_series": "Ascend 610",
+  "description": "Ascend 610 系列芯片硬件规格参数，数据来源: platform_config/Ascend610*.ini",
+  "data_source": "platform_config/Ascend610*.ini",
+
+  "shared": {
+    "_comment": "610 和 610Lite 架构差异较大，仅共享基本的 Cube/Vector 参数",
+
+    "vector_unit": {
+      "vec_calc_size_bytes": 128,
+      "fp16_elements_per_instruction": 64,
+      "fp32_elements_per_instruction": 32
+    },
+
+    "cube_unit": {
+      "cube_m_size": 16,
+      "cube_n_size": 16,
+      "cube_k_size": 16
+    },
+
+    "alignment": {
+      "base_alignment_bytes": 32,
+      "block_size_elements": {
+        "fp16": 16,
+        "fp32": 8,
+        "int8": 32
+      }
+    }
+  },
+
+  "variants": {
+    "610": {
+      "arch_type": 6,
+      "npu_arch": 2002,
+      "aic_version": "AIC-M-200",
+      "core_type_list": ["AICore", "VectorCore"],
+      "ai_core_cnt": 10,
+      "vector_core_cnt": 8,
+      "ai_cpu_cnt": 2,
+      "cube_freq_mhz": 960,
+      "ub_size_bytes": 262144,
+      "l0a_size_bytes": 65536,
+      "l0b_size_bytes": 65536,
+      "l0c_size_bytes": 262144,
+      "l1_size_bytes": 1048576,
+      "l2_size_bytes": 16777216,
+      "l2_size_readable": "16MB",
+      "gm_size_bytes": null,
+      "gm_size_readable": "unknown",
+      "ubblock_size": 32,
+      "ubbank_size": 4096,
+      "ubbank_num": 64,
+      "ubbank_group_num": 16,
+      "memory_rates_aicore": {
+        "ddr_rate": 17, "ddr_read_rate": 17, "ddr_write_rate": 17,
+        "l2_rate": 114, "l2_read_rate": 114, "l2_write_rate": 114,
+        "l1_to_l0_a_rate": 512, "l1_to_l0_b_rate": 256,
+        "l1_to_ub_rate": 128, "l0_c_to_ub_rate": 512,
+        "ub_to_l2_rate": 114, "ub_to_ddr_rate": 17, "ub_to_l1_rate": 256
+      },
+      "memory_rates_vectorcore": {
+        "ddr_rate": 9, "ddr_read_rate": 9, "ddr_write_rate": 9,
+        "l2_rate": 57, "l2_read_rate": 57, "l2_write_rate": 57,
+        "ub_to_l2_rate": 57, "ub_to_ddr_rate": 9
+      },
+      "unzip": { "engines": 4, "max_ratios": 64, "channels": 2 },
+      "note": "与 310P 系列架构相似 (AIC-M-200)"
+    },
+
+    "610Lite": {
+      "arch_type": 11,
+      "npu_arch": 3102,
+      "aic_version": "AIC-M-310",
+      "core_type_list": ["AICore", "VectorCore"],
+      "cube_vector_combine": "fuse",
+      "ai_core_cnt": 4,
+      "cube_core_cnt": 4,
+      "vector_core_cnt": 4,
+      "ai_cpu_cnt": 2,
+      "cube_freq_mhz": 1250,
+      "ub_size_bytes": 253952,
+      "l0a_size_bytes": 65536,
+      "l0b_size_bytes": 65536,
+      "l0c_size_bytes": 131072,
+      "l1_size_bytes": 1048576,
+      "l2_size_bytes": 16777216,
+      "l2_size_readable": "16MB",
+      "gm_size_bytes": null,
+      "gm_size_readable": "unknown",
+      "ubblock_size": 32,
+      "ubbank_size": 4096,
+      "ubbank_num": 64,
+      "ubbank_group_num": 16,
+      "memory_rates": {
+        "ddr_rate": 30, "ddr_read_rate": 30, "ddr_write_rate": 30,
+        "l2_rate": 160, "l2_read_rate": 160, "l2_write_rate": 160,
+        "l1_to_l0_a_rate": 256, "l1_to_l0_b_rate": 256,
+        "l1_to_ub_rate": 128, "l0_c_to_ub_rate": 512,
+        "ub_to_l2_rate": 160, "ub_to_ddr_rate": 30, "ub_to_l1_rate": 256
+      },
+      "unzip": { "engines": 1, "max_ratios": 32, "channels": 4 },
+      "features": { "support_fixpipe": true, "sparsity": true },
+      "note": "AIC-M-310 架构, fuse 模式, 与 BS9SX2A 同架构"
+    }
+  },
+
+  "lookup_rule": "检测芯片型号 -> 直接读 variants[型号] 获取完整参数（610 和 610Lite 架构差异较大，各自独立配置）"
+}

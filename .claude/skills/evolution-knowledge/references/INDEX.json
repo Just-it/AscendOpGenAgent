@@ -1,0 +1,360 @@
+{
+  "skill": "evolution-knowledge",
+  "version": "1.0",
+  "architectures": [
+    "a3",
+    "a5"
+  ],
+  "categories": {
+    "a3": [
+      "hardware",
+      "algorithm_insights",
+      "ascendc_api",
+      "optimization_patterns",
+      "proven_solutions",
+      "profiling_reference"
+    ],
+    "a5": [
+      "hardware",
+      "regbase_api",
+      "vf_programming",
+      "optimization_patterns",
+      "translation_rules"
+    ]
+  },
+  "stats": {
+    "a3": 22,
+    "a5": 19,
+    "total": 41
+  },
+  "entries": [
+    {
+      "source_key": "evolution-knowledge#a3/INDEX",
+      "kind": "a3",
+      "category": null,
+      "is_index": true,
+      "is_guide": false,
+      "doc_path": "a3/INDEX.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a3/algorithm_insights/INDEX",
+      "kind": "a3",
+      "category": "algorithm_insights",
+      "is_index": true,
+      "is_guide": false,
+      "doc_path": "a3/algorithm_insights/INDEX.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a3/algorithm_insights/attention_family",
+      "kind": "a3",
+      "category": "algorithm_insights",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a3/algorithm_insights/attention_family.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a3/algorithm_insights/elementwise_fusion",
+      "kind": "a3",
+      "category": "algorithm_insights",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a3/algorithm_insights/elementwise_fusion.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a3/algorithm_insights/guide",
+      "kind": "a3",
+      "category": "algorithm_insights",
+      "is_index": false,
+      "is_guide": true,
+      "doc_path": "a3/algorithm_insights/guide.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a3/algorithm_insights/reduction_ops",
+      "kind": "a3",
+      "category": "algorithm_insights",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a3/algorithm_insights/reduction_ops.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a3/ascendc_api/INDEX",
+      "kind": "a3",
+      "category": "ascendc_api",
+      "is_index": true,
+      "is_guide": false,
+      "doc_path": "a3/ascendc_api/INDEX.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a3/ascendc_api/common_pitfalls",
+      "kind": "a3",
+      "category": "ascendc_api",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a3/ascendc_api/common_pitfalls.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a3/ascendc_api/guide",
+      "kind": "a3",
+      "category": "ascendc_api",
+      "is_index": false,
+      "is_guide": true,
+      "doc_path": "a3/ascendc_api/guide.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a3/hardware/ascend910b_arch",
+      "kind": "a3",
+      "category": "hardware",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a3/hardware/ascend910b_arch.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a3/hardware/guide",
+      "kind": "a3",
+      "category": "hardware",
+      "is_index": false,
+      "is_guide": true,
+      "doc_path": "a3/hardware/guide.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a3/optimization_patterns/INDEX",
+      "kind": "a3",
+      "category": "optimization_patterns",
+      "is_index": true,
+      "is_guide": false,
+      "doc_path": "a3/optimization_patterns/INDEX.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a3/optimization_patterns/causal_block_skip",
+      "kind": "a3",
+      "category": "optimization_patterns",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a3/optimization_patterns/causal_block_skip.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a3/optimization_patterns/double_buffering",
+      "kind": "a3",
+      "category": "optimization_patterns",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a3/optimization_patterns/double_buffering.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a3/optimization_patterns/guide",
+      "kind": "a3",
+      "category": "optimization_patterns",
+      "is_index": false,
+      "is_guide": true,
+      "doc_path": "a3/optimization_patterns/guide.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a3/optimization_patterns/memory_coalescing",
+      "kind": "a3",
+      "category": "optimization_patterns",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a3/optimization_patterns/memory_coalescing.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a3/optimization_patterns/pipeline_overlap",
+      "kind": "a3",
+      "category": "optimization_patterns",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a3/optimization_patterns/pipeline_overlap.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a3/optimization_patterns/tiling_strategies",
+      "kind": "a3",
+      "category": "optimization_patterns",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a3/optimization_patterns/tiling_strategies.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a3/profiling_reference/INDEX",
+      "kind": "a3",
+      "category": "profiling_reference",
+      "is_index": true,
+      "is_guide": false,
+      "doc_path": "a3/profiling_reference/INDEX.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a3/profiling_reference/csv_fields_reference",
+      "kind": "a3",
+      "category": "profiling_reference",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a3/profiling_reference/csv_fields_reference.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a3/profiling_reference/optimization_quickref",
+      "kind": "a3",
+      "category": "profiling_reference",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a3/profiling_reference/optimization_quickref.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a3/proven_solutions/INDEX",
+      "kind": "a3",
+      "category": "proven_solutions",
+      "is_index": true,
+      "is_guide": false,
+      "doc_path": "a3/proven_solutions/INDEX.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a5/INDEX",
+      "kind": "a5",
+      "category": null,
+      "is_index": true,
+      "is_guide": false,
+      "doc_path": "a5/INDEX.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a5/hardware/ascend950_arch",
+      "kind": "a5",
+      "category": "hardware",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a5/hardware/ascend950_arch.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a5/optimization_patterns/instruction_dual_issue",
+      "kind": "a5",
+      "category": "optimization_patterns",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a5/optimization_patterns/instruction_dual_issue.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a5/optimization_patterns/loop_unrolling",
+      "kind": "a5",
+      "category": "optimization_patterns",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a5/optimization_patterns/loop_unrolling.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a5/optimization_patterns/low_latency_reduce",
+      "kind": "a5",
+      "category": "optimization_patterns",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a5/optimization_patterns/low_latency_reduce.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a5/optimization_patterns/register_reuse",
+      "kind": "a5",
+      "category": "optimization_patterns",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a5/optimization_patterns/register_reuse.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a5/regbase_api/addr_reg",
+      "kind": "a5",
+      "category": "regbase_api",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a5/regbase_api/addr_reg.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a5/regbase_api/load_store",
+      "kind": "a5",
+      "category": "regbase_api",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a5/regbase_api/load_store.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a5/regbase_api/local_mem_bar",
+      "kind": "a5",
+      "category": "regbase_api",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a5/regbase_api/local_mem_bar.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a5/regbase_api/mask_reg",
+      "kind": "a5",
+      "category": "regbase_api",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a5/regbase_api/mask_reg.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a5/regbase_api/reg_tensor",
+      "kind": "a5",
+      "category": "regbase_api",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a5/regbase_api/reg_tensor.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a5/translation_rules/data_path_migration",
+      "kind": "a5",
+      "category": "translation_rules",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a5/translation_rules/data_path_migration.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a5/translation_rules/host_side_migration",
+      "kind": "a5",
+      "category": "translation_rules",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a5/translation_rules/host_side_migration.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a5/translation_rules/membase_to_regbase",
+      "kind": "a5",
+      "category": "translation_rules",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a5/translation_rules/membase_to_regbase.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a5/translation_rules/sync_migration",
+      "kind": "a5",
+      "category": "translation_rules",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a5/translation_rules/sync_migration.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a5/vf_programming/hardware_loop",
+      "kind": "a5",
+      "category": "vf_programming",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a5/vf_programming/hardware_loop.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a5/vf_programming/simd_simt_hybrid",
+      "kind": "a5",
+      "category": "vf_programming",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a5/vf_programming/simd_simt_hybrid.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a5/vf_programming/simd_vf_basics",
+      "kind": "a5",
+      "category": "vf_programming",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a5/vf_programming/simd_vf_basics.md"
+    },
+    {
+      "source_key": "evolution-knowledge#a5/vf_programming/vf_fusion_rules",
+      "kind": "a5",
+      "category": "vf_programming",
+      "is_index": false,
+      "is_guide": false,
+      "doc_path": "a5/vf_programming/vf_fusion_rules.md"
+    }
+  ]
+}

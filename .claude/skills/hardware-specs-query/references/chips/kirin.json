@@ -1,0 +1,74 @@
+{
+  "chip_series": "Kirin NPU",
+  "description": "Kirin 系列 NPU 芯片硬件规格参数，数据来源: platform_config/Kirin*.ini",
+  "data_source": "platform_config/Kirin*.ini",
+
+  "shared": {
+    "_comment": "Kirin 系列均为单核 NPU, 面向移动端, 无 L2, 参数精简",
+
+    "ai_core_architecture": {
+      "core_type": "AI Core",
+      "core_type_list": ["AICore", "VectorCore"],
+      "ai_core_cnt": 1,
+      "vector_core_cnt": 1,
+      "note": "移动端单核 NPU"
+    },
+
+    "vector_unit": {
+      "vec_calc_size_bytes": 128,
+      "fp16_elements_per_instruction": 64,
+      "fp32_elements_per_instruction": 32
+    },
+
+    "cube_unit": {
+      "cube_m_size": 16,
+      "cube_k_size": 16,
+      "note": "cube_n_size=8 (非标准的 16x8x16)"
+    },
+
+    "alignment": {
+      "base_alignment_bytes": 32
+    },
+
+    "features": {
+      "support_fixpipe": true,
+      "sparsity": true
+    }
+  },
+
+  "variants": {
+    "Kirin9030": {
+      "npu_arch": 3113,
+      "aic_version": "AIC-L-311",
+      "cube_n_size": 8,
+      "l0a_size_bytes": 32768,
+      "l0b_size_bytes": 32768,
+      "l0c_size_bytes": 65536,
+      "l1_size_bytes": 524288,
+      "l2_size_bytes": 0,
+      "ub_size_bytes": 131072,
+      "ub_size_readable": "128KB",
+      "gm_size_bytes": null,
+      "memory_rates": null,
+      "note": "L0A/B=32KB (比标准小一半), L0C=64KB, L1=512KB, 无 L2, 无 memory_rates 数据"
+    },
+
+    "KirinX90": {
+      "npu_arch": 3003,
+      "aic_version": "AIC-L-300",
+      "cube_n_size": 8,
+      "l0a_size_bytes": 65536,
+      "l0b_size_bytes": 65536,
+      "l0c_size_bytes": 131072,
+      "l1_size_bytes": 1048576,
+      "l2_size_bytes": 0,
+      "ub_size_bytes": 131072,
+      "ub_size_readable": "128KB",
+      "gm_size_bytes": null,
+      "memory_rates": null,
+      "note": "标准 L0A/B=64KB, L0C=128KB, L1=1MB, 无 L2, 无 memory_rates 数据"
+    }
+  },
+
+  "lookup_rule": "检测芯片型号 -> 读 variants[型号] 获取参数; 注意 Kirin 系列 cube_n=8 (非标准 16), 无 memory_rates, 无法做精确的带宽计算"
+}

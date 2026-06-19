@@ -1,0 +1,160 @@
+{
+  "chip_series": "Ascend 310P",
+  "description": "Ascend 310P 系列芯片硬件规格参数，数据来源: platform_config/Ascend310P*.ini",
+  "data_source": "platform_config/Ascend310P*.ini",
+
+  "shared": {
+    "_comment": "以下参数在 310P 全系列（P1/P3/P5/P7）中相同",
+
+    "ai_core_architecture": {
+      "core_type": "AI Core",
+      "core_type_list": ["AICore", "VectorCore"],
+      "note": "310P 系列 AI Core（含 Cube 计算）+ 独立 VectorCore"
+    },
+
+    "vector_unit": {
+      "vec_calc_size_bytes": 128,
+      "fp16_elements_per_instruction": 64,
+      "fp32_elements_per_instruction": 32
+    },
+
+    "cube_unit": {
+      "cube_m_size": 16,
+      "cube_n_size": 16,
+      "cube_k_size": 16,
+      "note": "16x16x16 矩阵乘单元"
+    },
+
+    "memory": {
+      "ub": {
+        "size_bytes": 262144,
+        "size_readable": "256KB",
+        "ubblock_size": 32,
+        "ubbank_size": 4096,
+        "ubbank_num": 64,
+        "ubbank_group_num": 16,
+        "ubburst_in_one_block": 32
+      },
+      "l0a": { "size_bytes": 65536, "size_readable": "64KB" },
+      "l0b": { "size_bytes": 65536, "size_readable": "64KB" },
+      "l0c": { "size_bytes": 262144, "size_readable": "256KB" },
+      "l1": { "size_bytes": 1048576, "size_readable": "1MB" },
+      "l2": { "size_bytes": 16777216, "size_readable": "16MB" }
+    },
+
+    "memory_rates_aicore": {
+      "_comment": "AI Core 搬运速率 (Bytes/cycle)",
+      "ddr_rate": 17,
+      "ddr_read_rate": 17,
+      "ddr_write_rate": 17,
+      "l2_rate": 114,
+      "l2_read_rate": 114,
+      "l2_write_rate": 114,
+      "l1_to_l0_a_rate": 512,
+      "l1_to_l0_b_rate": 256,
+      "l1_to_ub_rate": 128,
+      "l0_c_to_ub_rate": 512,
+      "ub_to_l2_rate": 114,
+      "ub_to_ddr_rate": 17,
+      "ub_to_l1_rate": 256
+    },
+
+    "memory_rates_vectorcore": {
+      "_comment": "VectorCore 搬运速率 (Bytes/cycle)",
+      "ddr_rate": 9,
+      "ddr_read_rate": 9,
+      "ddr_write_rate": 9,
+      "l2_rate": 57,
+      "l2_read_rate": 57,
+      "l2_write_rate": 57,
+      "ub_to_l2_rate": 57,
+      "ub_to_ddr_rate": 9
+    },
+
+    "alignment": {
+      "base_alignment_bytes": 32,
+      "block_size_elements": {
+        "fp16": 16,
+        "fp32": 8,
+        "int8": 32,
+        "int16": 16,
+        "int32": 8
+      }
+    },
+
+    "unzip": {
+      "engines": 4,
+      "max_ratios": 64,
+      "channels": 2
+    }
+  },
+
+  "variants": {
+    "_comment": "各子型号差异参数",
+
+    "310P1": {
+      "arch_type": 1,
+      "npu_arch": 2002,
+      "aic_version": "AIC-M-200",
+      "ai_core_cnt": 10,
+      "vector_core_cnt": 8,
+      "ai_cpu_cnt": 8,
+      "cube_freq_mhz": 1060,
+      "gm_size_bytes": 24000000000,
+      "gm_size_readable": "~22.4GB"
+    },
+
+    "310P3": {
+      "arch_type": 1,
+      "npu_arch": 2002,
+      "aic_version": "AIC-M-200",
+      "ai_core_cnt": 8,
+      "vector_core_cnt": 7,
+      "ai_cpu_cnt": 7,
+      "cube_freq_mhz": 1060,
+      "gm_size_bytes": 24000000000,
+      "gm_size_readable": "~22.4GB"
+    },
+
+    "310P5": {
+      "arch_type": 1,
+      "npu_arch": 2002,
+      "aic_version": "AIC-M-200",
+      "ai_core_cnt": 8,
+      "vector_core_cnt": 7,
+      "ai_cpu_cnt": 8,
+      "cube_freq_mhz": 800,
+      "gm_size_bytes": 24000000000,
+      "gm_size_readable": "~22.4GB"
+    },
+
+    "310P7": {
+      "arch_type": 1,
+      "npu_arch": 2002,
+      "aic_version": "AIC-M-200",
+      "ai_core_cnt": 8,
+      "vector_core_cnt": 7,
+      "ai_cpu_cnt": 8,
+      "cube_freq_mhz": 550,
+      "gm_size_bytes": 24000000000,
+      "gm_size_readable": "~22.4GB",
+      "note": "低频版本，适用于低功耗场景"
+    }
+  },
+
+  "derived_params": {
+    "calculation_notes": {
+      "bandwidth_per_core_gbps": "rate (Bytes/cycle) x freq (MHz) / 1000 = GB/s",
+      "cube_fp16_tflops_per_core": "16x16x16 x 2 x freq / 1e6 = TFLOPS/core",
+      "vector_fp16_tflops_per_core": "128B / 2B x freq x 2(FMA) / 1e6 = TFLOPS/core"
+    },
+    "examples": {
+      "310P1_gm_to_ub_per_core_gbps": "ddr_rate(17) x freq(1060) / 1000 = 18.02 GB/s per core",
+      "310P1_gm_to_ub_aggregate_gbps": "18.02 x 10 cores = 180.2 GB/s (理论峰值)",
+      "310P1_cube_fp16_tflops_per_core": "16x16x16 x 2 x 1060 / 1e6 = 8.683 TFLOPS",
+      "310P1_cube_fp16_aggregate_tflops": "8.683 x 10 = 86.83 TFLOPS"
+    }
+  },
+
+  "lookup_rule": "检测芯片型号 -> 读 shared 获取通用参数 -> 读 variants[型号] 获取核数/频率/容量 -> 用 derived_params 公式计算带宽和算力"
+}

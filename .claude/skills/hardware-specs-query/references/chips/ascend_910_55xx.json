@@ -1,0 +1,104 @@
+{
+  "chip_series": "Ascend 910_55xx",
+  "description": "Ascend 910_55xx 系列芯片硬件规格参数，数据来源: platform_config/Ascend910_5591.ini",
+  "data_source": "platform_config/Ascend910_5591.ini",
+
+  "shared": {
+    "_comment": "910_55xx 系列使用 AIC-C-310 架构，但 vector_core_cnt 等于 cube_core_cnt（非 2 倍）",
+
+    "ai_core_architecture": {
+      "core_type": "AI Core",
+      "cube_vector_combine": "fuse,split",
+      "core_type_list": ["CubeCore", "VectorCore"],
+      "note": "支持 fuse 和 split 模式, vector_core_cnt = cube_core_cnt (1:1)"
+    },
+
+    "vector_unit": {
+      "vec_calc_size_bytes": 128,
+      "fp16_elements_per_instruction": 64,
+      "fp32_elements_per_instruction": 32
+    },
+
+    "cube_unit": {
+      "cube_m_size": 16,
+      "cube_n_size": 16,
+      "cube_k_size": 16
+    },
+
+    "memory": {
+      "ub": {
+        "size_bytes": 253952,
+        "size_readable": "248KB",
+        "ubblock_size": 32,
+        "ubbank_size": 4096,
+        "ubbank_num": 16,
+        "ubbank_group_num": 8,
+        "ubburst_in_one_block": 32
+      },
+      "l0a": { "size_bytes": 65536, "size_readable": "64KB" },
+      "l0b": { "size_bytes": 65536, "size_readable": "64KB" },
+      "l0c": { "size_bytes": 262144, "size_readable": "256KB" },
+      "l1": { "size_bytes": 524288, "size_readable": "512KB" }
+    },
+
+    "memory_rates": {
+      "_comment": "单位: Bytes/cycle, CubeCore 和 VectorCore 搬运速率相同",
+      "ddr_rate": 112,
+      "ddr_read_rate": 112,
+      "ddr_write_rate": 112,
+      "l2_rate": 128,
+      "l2_read_rate": 128,
+      "l2_write_rate": 128,
+      "l1_to_l0_a_rate": 256,
+      "l1_to_l0_b_rate": 256,
+      "l1_to_ub_rate": 128,
+      "l0_c_to_ub_rate": 128,
+      "ub_to_l2_rate": 128,
+      "ub_to_ddr_rate": 128,
+      "ub_to_l1_rate": 128
+    },
+
+    "alignment": {
+      "base_alignment_bytes": 32,
+      "block_size_elements": {
+        "fp16": 16,
+        "fp32": 8,
+        "int8": 32,
+        "int16": 16,
+        "int32": 8
+      }
+    },
+
+    "features": {
+      "support_fixpipe": true,
+      "sparsity": false
+    }
+  },
+
+  "variants": {
+    "910_5591": {
+      "aic_version": "AIC-C-310",
+      "npu_arch": null,
+      "ai_core_cnt": 24,
+      "cube_core_cnt": 24,
+      "vector_core_cnt": 24,
+      "ai_cpu_cnt": 7,
+      "cube_freq_mhz": 1500,
+      "l2_size_bytes": 50331648,
+      "l2_size_readable": "48MB",
+      "gm_size_bytes": 34359738368,
+      "gm_size_readable": "32GB",
+      "note": "vector_core_cnt=cube_core_cnt=24, 1:1 比例"
+    }
+  },
+
+  "derived_params": {
+    "examples": {
+      "5591_gm_to_ub_per_core_gbps": "ddr_rate(112) x freq(1500) / 1000 = 168.0 GB/s per core",
+      "5591_cube_fp16_tflops_per_core": "16x16x16 x 2 x 1500 / 1e6 = 12.288 TFLOPS",
+      "5591_cube_fp16_aggregate_tflops": "12.288 x 24 = 294.912 TFLOPS"
+    }
+  },
+
+  "lookup_rule": "检测芯片型号 -> 读 shared 获取通用参数 -> 读 variants[型号] 获取核数/频率/容量"
+}

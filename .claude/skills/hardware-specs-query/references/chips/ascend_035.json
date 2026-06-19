@@ -1,0 +1,88 @@
+{
+  "chip_series": "Ascend 035",
+  "description": "Ascend 035 系列芯片硬件规格参数（微型 NPU），数据来源: platform_config/Ascend035*.ini",
+  "data_source": "platform_config/Ascend035*.ini",
+
+  "shared": {
+    "_comment": "Ascend 035 系列为微型 NPU (AIC-N-350), 无 L0A/B/C/L1, 仅有 UB",
+
+    "ai_core_architecture": {
+      "core_type": "AI Core",
+      "core_type_list": ["AICore"],
+      "ai_core_cnt": 1,
+      "vector_core_cnt": 0,
+      "note": "微型单核 NPU, 无 L0/L1 层级, 仅有 UB 直接操作"
+    },
+
+    "vector_unit": {
+      "vec_calc_size_bytes": 4,
+      "note": "vec_calc_size=4, 极小向量宽度 (非标准的 128)"
+    },
+
+    "cube_unit": {
+      "cube_m_size": 1,
+      "cube_n_size": 16,
+      "cube_k_size": 16,
+      "note": "1x16x16 矩阵乘单元 (m=1, 非标准)"
+    },
+
+    "memory": {
+      "l0a": { "size_bytes": 0, "note": "无 L0A" },
+      "l0b": { "size_bytes": 0, "note": "无 L0B" },
+      "l0c": { "size_bytes": 0, "note": "无 L0C" },
+      "l1": { "size_bytes": 0, "note": "无 L1" },
+      "l2": { "size_bytes": 0, "note": "无 L2" }
+    },
+
+    "ub_common": {
+      "ubbank_size": 2048,
+      "ubbank_num": 16,
+      "ubbank_group_num": 2,
+      "ubblock_size": 16,
+      "ubburst_in_one_block": 8,
+      "note": "ubblock_size=16 (非标准的 32), ubburst=8"
+    },
+
+    "memory_rates": null,
+
+    "features": {
+      "support_fixpipe": true
+    }
+  },
+
+  "variants": {
+    "035": {
+      "arch_type": 9,
+      "npu_arch": 3505,
+      "aic_version": "AIC-N-350",
+      "cube_freq_mhz": 150,
+      "ub_size_bytes": 32768,
+      "ub_size_readable": "32KB",
+      "gm_size_bytes": null,
+      "note": "最小配, UB=32KB, freq=150MHz"
+    },
+
+    "035A": {
+      "arch_type": 9,
+      "npu_arch": 3505,
+      "aic_version": "AIC-N-350",
+      "cube_freq_mhz": 200,
+      "ub_size_bytes": 131072,
+      "ub_size_readable": "128KB",
+      "gm_size_bytes": null
+    },
+
+    "035B": {
+      "arch_type": 9,
+      "npu_arch": 3505,
+      "aic_version": "AIC-N-350",
+      "cube_freq_mhz": 200,
+      "ub_size_bytes": 262144,
+      "ub_size_readable": "256KB",
+      "gm_size_bytes": null,
+      "note": "最大 UB 版本"
+    }
+  },
+
+  "lookup_rule": "检测芯片型号 -> 读 variants[型号]; 注意 035 系列与标准 Ascend 差异极大: 无 L0/L1/L2, vec_calc_size=4, cube_m=1, ubblock=16"
+}

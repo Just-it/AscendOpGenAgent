@@ -1,0 +1,150 @@
+{
+  "chip_series": "Ascend 910",
+  "description": "Ascend 910 初代系列芯片硬件规格参数（910A/PremiumA/ProA/ProB），数据来源: platform_config/Ascend910*.ini",
+  "data_source": "platform_config/Ascend910{A,PremiumA,ProA,ProB}.ini",
+
+  "shared": {
+    "_comment": "以下参数在 910 初代全系列中相同",
+
+    "ai_core_architecture": {
+      "core_type": "AI Core",
+      "core_type_list": ["AICore"],
+      "cube_vector_combine": "unified",
+      "note": "910 初代为统一核架构，Cube+Vector 在同一个 AI Core 内"
+    },
+
+    "vector_unit": {
+      "vec_calc_size_bytes": 128,
+      "fp16_elements_per_instruction": 64,
+      "fp32_elements_per_instruction": 32
+    },
+
+    "cube_unit": {
+      "cube_m_size": 16,
+      "cube_n_size": 16,
+      "cube_k_size": 16,
+      "note": "16x16x16 矩阵乘单元"
+    },
+
+    "memory": {
+      "ub": {
+        "size_bytes": 262144,
+        "size_readable": "256KB",
+        "ubblock_size": 32,
+        "ubbank_size": 4096,
+        "ubbank_num": 64,
+        "ubbank_group_num": 16,
+        "ubburst_in_one_block": 32
+      },
+      "l0a": { "size_bytes": 65536, "size_readable": "64KB" },
+      "l0b": { "size_bytes": 65536, "size_readable": "64KB" },
+      "l0c": { "size_bytes": 262144, "size_readable": "256KB" },
+      "l1": { "size_bytes": 1048576, "size_readable": "1MB" },
+      "l2": { "size_bytes": 33554432, "size_readable": "32MB" }
+    },
+
+    "memory_rates": {
+      "_comment": "单位: Bytes/cycle, 全系列相同",
+      "ddr_rate": 32,
+      "ddr_read_rate": 32,
+      "ddr_write_rate": 32,
+      "l2_rate": 110,
+      "l2_read_rate": 110,
+      "l2_write_rate": 86,
+      "l1_to_l0_a_rate": 512,
+      "l1_to_l0_b_rate": 256,
+      "l1_to_ub_rate": 128,
+      "l0_c_to_ub_rate": 256,
+      "ub_to_l2_rate": 64,
+      "ub_to_ddr_rate": 64,
+      "ub_to_l1_rate": 128
+    },
+
+    "alignment": {
+      "base_alignment_bytes": 32,
+      "block_size_elements": {
+        "fp16": 16,
+        "fp32": 8,
+        "int8": 32,
+        "int16": 16,
+        "int32": 8
+      }
+    },
+
+    "unzip": {
+      "engines": 4,
+      "max_ratios": 64,
+      "channels": 2
+    }
+  },
+
+  "variants": {
+    "_comment": "各子型号差异参数，均为统一核架构",
+
+    "910A": {
+      "arch_type": 3,
+      "npu_arch": 1001,
+      "aic_version": "AIC-C-100",
+      "ai_core_cnt": 32,
+      "vector_core_cnt": 0,
+      "ai_cpu_cnt": 4,
+      "cube_freq_mhz": 1000,
+      "gm_size_bytes": null,
+      "gm_size_readable": "unknown",
+      "note": "基础版"
+    },
+
+    "910PremiumA": {
+      "arch_type": 3,
+      "npu_arch": 1001,
+      "aic_version": "AIC-C-100",
+      "ai_core_cnt": 32,
+      "vector_core_cnt": 0,
+      "ai_cpu_cnt": 4,
+      "cube_freq_mhz": 1220,
+      "gm_size_bytes": null,
+      "gm_size_readable": "unknown",
+      "note": "高频版"
+    },
+
+    "910ProA": {
+      "arch_type": 3,
+      "npu_arch": 1001,
+      "aic_version": "AIC-C-100",
+      "ai_core_cnt": 32,
+      "vector_core_cnt": 0,
+      "ai_cpu_cnt": 4,
+      "cube_freq_mhz": 1100,
+      "gm_size_bytes": null,
+      "gm_size_readable": "unknown"
+    },
+
+    "910ProB": {
+      "arch_type": 3,
+      "npu_arch": 1001,
+      "aic_version": "AIC-C-100",
+      "ai_core_cnt": 30,
+      "vector_core_cnt": 0,
+      "ai_cpu_cnt": 4,
+      "cube_freq_mhz": 1150,
+      "gm_size_bytes": null,
+      "gm_size_readable": "unknown",
+      "note": "30 核版本"
+    }
+  },
+
+  "derived_params": {
+    "calculation_notes": {
+      "bandwidth_per_core_gbps": "rate (Bytes/cycle) x freq (MHz) / 1000 = GB/s",
+      "cube_fp16_tflops_per_core": "16x16x16 x 2 x freq / 1e6 = TFLOPS/core"
+    },
+    "examples": {
+      "910A_gm_to_ub_per_core_gbps": "ddr_rate(32) x freq(1000) / 1000 = 32.0 GB/s per core",
+      "910A_cube_fp16_tflops_per_core": "16x16x16 x 2 x 1000 / 1e6 = 8.192 TFLOPS",
+      "910A_cube_fp16_aggregate_tflops": "8.192 x 32 = 262.144 TFLOPS",
+      "910PremiumA_cube_fp16_aggregate_tflops": "16x16x16 x 2 x 1220 / 1e6 x 32 = 319.816 TFLOPS"
+    }
+  },
+
+  "lookup_rule": "检测芯片型号 -> 读 shared 获取通用参数 -> 读 variants[型号] 获取核数/频率 -> 用 derived_params 公式计算带宽和算力"
+}

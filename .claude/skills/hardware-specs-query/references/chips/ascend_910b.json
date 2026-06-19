@@ -1,0 +1,272 @@
+{
+  "chip_series": "Ascend 910B",
+  "description": "Ascend 910B 系列芯片硬件规格参数，数据来源: platform_config/*.ini",
+  "data_source": "platform_config/Ascend910B*.ini",
+
+  "shared": {
+    "_comment": "以下参数在 910B 全系列（Gen2: B1/B2/B2C/B3/B4/B4-1）中相同，910B(Gen1) 单独标注差异",
+
+    "ai_core_architecture": {
+      "core_type": "AI Core",
+      "cube_vector_combine": "split",
+      "core_type_list": ["CubeCore", "VectorCore"],
+      "ai_cpu_cnt": 6,
+      "note": "Gen2 将 Cube 和 Vector 拆分为独立核; Gen1(910B) 为统一 AI Core"
+    },
+
+    "vector_unit": {
+      "vec_calc_size_bytes": 128,
+      "fp16_elements_per_instruction": 64,
+      "fp32_elements_per_instruction": 32,
+      "note": "vec_calc_size=128 表示每次向量指令处理 128 Bytes"
+    },
+
+    "cube_unit": {
+      "cube_m_size": 16,
+      "cube_n_size": 16,
+      "cube_k_size": 16,
+      "note": "16×16×16 矩阵乘单元"
+    },
+
+    "memory": {
+      "ub": {
+        "size_bytes_gen2": 196608,
+        "size_readable_gen2": "192KB",
+        "size_bytes_gen1_910b": 262144,
+        "size_readable_gen1_910b": "256KB",
+        "ubblock_size": 32,
+        "ubbank_size": 4096,
+        "ubbank_num": 64,
+        "ubbank_group_num": 16,
+        "ubburst_in_one_block": 32,
+        "note": "Gen2(B1~B4) UB=192KB; Gen1(910B) UB=256KB"
+      },
+      "l0a": { "size_bytes": 65536, "size_readable": "64KB" },
+      "l0b": { "size_bytes": 65536, "size_readable": "64KB" },
+      "l0c": {
+        "size_bytes_gen2": 131072,
+        "size_readable_gen2": "128KB",
+        "size_bytes_gen1_910b": 262144,
+        "size_readable_gen1_910b": "256KB"
+      },
+      "l1": {
+        "size_bytes_gen2": 524288,
+        "size_readable_gen2": "512KB",
+        "size_bytes_gen1_910b": 1048576,
+        "size_readable_gen1_910b": "1MB"
+      }
+    },
+
+    "memory_rates": {
+      "_comment": "单位: Bytes/cycle, 全系列相同",
+      "ddr_rate": 32,
+      "ddr_read_rate": 32,
+      "ddr_write_rate": 32,
+      "l2_rate": 110,
+      "l2_read_rate": 110,
+      "l2_write_rate": 86,
+      "l1_to_l0_a_rate": 512,
+      "l1_to_l0_b_rate": 256,
+      "l1_to_ub_rate": 128,
+      "l0_c_to_ub_rate": 256,
+      "ub_to_l2_rate": 64,
+      "ub_to_ddr_rate": 64,
+      "ub_to_l1_rate": 128
+    },
+
+    "alignment": {
+      "base_alignment_bytes": 32,
+      "block_size_elements": {
+        "fp16": 16,
+        "bf16": 16,
+        "fp32": 8,
+        "int8": 32,
+        "int16": 16,
+        "int32": 8
+      }
+    },
+
+    "pipeline": {
+      "stages": ["MTE2 (GM→UB)", "Vector/Cube (计算)", "MTE3 (UB→GM)"],
+      "double_buffer_overlap": true,
+      "pipe_barrier_types": ["PIPE_ALL", "PIPE_V", "PIPE_MTE2", "PIPE_MTE3", "PIPE_S"],
+      "sync_mechanisms": ["EnQue/DeQue", "SetFlag/WaitFlag", "PipeBarrier"]
+    },
+
+    "features_gen2": {
+      "support_bf16": true,
+      "support_inf_nan": true,
+      "support_fixpipe": true,
+      "sparsity": true,
+      "ffts_mode": "ffts-plus",
+      "hardware_sync_betweencore": true
+    },
+
+    "dtype_mkn": {
+      "default": [16, 16, 16],
+      "int8": [16, 32, 16],
+      "uint8": [16, 32, 16],
+      "int4": [16, 64, 16],
+      "int2": [16, 128, 16]
+    },
+
+    "unzip": {
+      "engines": 4,
+      "max_ratios": 64,
+      "channels": 2
+    }
+  },
+
+  "variants": {
+    "_comment": "各子型号差异参数",
+
+    "910B": {
+      "generation": "Gen1",
+      "arch_type": 3,
+      "npu_arch": 1001,
+      "aic_version": "AIC-C-100",
+      "core_type_list": ["AICore"],
+      "cube_vector_combine": "unified",
+      "ai_core_cnt": 30,
+      "cube_core_cnt": 30,
+      "vector_core_cnt": 0,
+      "cube_freq_mhz": 900,
+      "ub_size_bytes": 262144,
+      "l0c_size_bytes": 262144,
+      "l1_size_bytes": 1048576,
+      "l2_size_bytes": 33554432,
+      "l2_size_readable": "32MB",
+      "gm_size_bytes": null,
+      "gm_size_readable": "unknown",
+      "note": "Gen1 统一核架构，UB/L0C/L1 均比 Gen2 大一倍，但频率低且 L2 小"
+    },
+
+    "910B1": {
+      "generation": "Gen2",
+      "arch_type": 4,
+      "npu_arch": 2201,
+      "aic_version": "AIC-C-220",
+      "ai_core_cnt": 24,
+      "cube_core_cnt": 24,
+      "vector_core_cnt": 48,
+      "cube_freq_mhz": 1850,
+      "ub_size_bytes": 196608,
+      "l0c_size_bytes": 131072,
+      "l1_size_bytes": 524288,
+      "l2_size_bytes": 201326592,
+      "l2_size_readable": "192MB",
+      "gm_size_bytes": 68719476736,
+      "gm_size_readable": "64GB"
+    },
+
+    "910B2": {
+      "generation": "Gen2",
+      "arch_type": 4,
+      "npu_arch": 2201,
+      "aic_version": "AIC-C-220",
+      "ai_core_cnt": 24,
+      "cube_core_cnt": 24,
+      "vector_core_cnt": 48,
+      "cube_freq_mhz": 1800,
+      "ub_size_bytes": 196608,
+      "l0c_size_bytes": 131072,
+      "l1_size_bytes": 524288,
+      "l2_size_bytes": 201326592,
+      "l2_size_readable": "192MB",
+      "gm_size_bytes": 68719476736,
+      "gm_size_readable": "64GB"
+    },
+
+    "910B2C": {
+      "generation": "Gen2",
+      "arch_type": 4,
+      "npu_arch": 2201,
+      "aic_version": "AIC-C-220",
+      "ai_core_cnt": 24,
+      "cube_core_cnt": 24,
+      "vector_core_cnt": 48,
+      "cube_freq_mhz": 1800,
+      "ub_size_bytes": 196608,
+      "l0c_size_bytes": 131072,
+      "l1_size_bytes": 524288,
+      "l2_size_bytes": 201326592,
+      "l2_size_readable": "192MB",
+      "gm_size_bytes": null,
+      "gm_size_readable": "unknown"
+    },
+
+    "910B3": {
+      "generation": "Gen2",
+      "arch_type": 4,
+      "npu_arch": 2201,
+      "aic_version": "AIC-C-220",
+      "ai_core_cnt": 20,
+      "cube_core_cnt": 20,
+      "vector_core_cnt": 40,
+      "cube_freq_mhz": 1800,
+      "ub_size_bytes": 196608,
+      "l0c_size_bytes": 131072,
+      "l1_size_bytes": 524288,
+      "l2_size_bytes": 201326592,
+      "l2_size_readable": "192MB",
+      "gm_size_bytes": 68719476736,
+      "gm_size_readable": "64GB"
+    },
+
+    "910B4": {
+      "generation": "Gen2",
+      "arch_type": 4,
+      "npu_arch": 2201,
+      "aic_version": "AIC-C-220",
+      "ai_core_cnt": 20,
+      "cube_core_cnt": 20,
+      "vector_core_cnt": 40,
+      "cube_freq_mhz": 1500,
+      "ub_size_bytes": 196608,
+      "l0c_size_bytes": 131072,
+      "l1_size_bytes": 524288,
+      "l2_size_bytes": 100663296,
+      "l2_size_readable": "96MB",
+      "gm_size_bytes": 34359738368,
+      "gm_size_readable": "32GB"
+    },
+
+    "910B4-1": {
+      "generation": "Gen2",
+      "arch_type": 4,
+      "npu_arch": 2201,
+      "aic_version": "AIC-C-220",
+      "ai_core_cnt": 20,
+      "cube_core_cnt": 20,
+      "vector_core_cnt": 40,
+      "cube_freq_mhz": 1500,
+      "ub_size_bytes": 196608,
+      "l0c_size_bytes": 131072,
+      "l1_size_bytes": 524288,
+      "l2_size_bytes": 176160768,
+      "l2_size_readable": "168MB",
+      "gm_size_bytes": 34359738368,
+      "gm_size_readable": "32GB"
+    }
+  },
+
+  "derived_params": {
+    "_comment": "以下参数需要根据 variant 的 core_count 和 freq 计算",
+    "calculation_notes": {
+      "bandwidth_per_core_gbps": "memory_rate (Bytes/cycle) × cube_freq (MHz) × 1e6 / 1e9 = rate × freq / 1000 GB/s",
+      "aggregate_bandwidth_gbps": "per_core_gbps × ai_core_cnt",
+      "vector_fp16_tflops_per_core": "vec_calc_size / sizeof(fp16) × cube_freq × 1e6 × 2(FMA) / 1e12",
+      "cube_fp16_tflops_per_core": "cube_m × cube_n × cube_k × 2 × cube_freq × 1e6 / 1e12"
+    },
+    "examples": {
+      "910B3_gm_to_ub_per_core_gbps": "ddr_rate(32) × freq(1800) / 1000 = 57.6 GB/s per core",
+      "910B3_gm_to_ub_aggregate_gbps": "57.6 × 20 cores = 1152 GB/s (理论峰值，实际受 HBM 限制)",
+      "910B3_vector_fp16_tflops_per_core": "128B / 2B × 1800MHz × 2 / 1e6 = 0.2304 TFLOPS",
+      "910B3_vector_fp16_aggregate_tflops": "0.2304 × 20 = 4.608 TFLOPS",
+      "910B3_cube_fp16_tflops_per_core": "16×16×16 × 2 × 1800 / 1e6 = 14.746 TFLOPS",
+      "910B3_cube_fp16_aggregate_tflops": "14.746 × 20 = 294.912 TFLOPS"
+    }
+  },
+
+  "lookup_rule": "检测芯片型号 → 读 shared 获取通用参数 → 读 variants[型号] 获取核数/频率/容量 → 用 derived_params 公式计算带宽和算力"
+}

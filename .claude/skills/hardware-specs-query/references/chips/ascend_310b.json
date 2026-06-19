@@ -1,0 +1,186 @@
+{
+  "chip_series": "Ascend 310B",
+  "description": "Ascend 310B 系列芯片硬件规格参数，数据来源: platform_config/Ascend310B*.ini",
+  "data_source": "platform_config/Ascend310B*.ini",
+
+  "shared": {
+    "_comment": "以下参数在 310B 全系列（B1/B2/B3/B4）中相同",
+
+    "ai_core_architecture": {
+      "core_type": "AI Core",
+      "cube_vector_combine": "fuse,split",
+      "core_type_list": ["AICore", "VectorCore", "CubeCore"],
+      "ai_cpu_cnt": 4,
+      "note": "310B 支持 fuse（统一核）和 split（拆分核）两种模式"
+    },
+
+    "vector_unit": {
+      "vec_calc_size_bytes": 128,
+      "fp16_elements_per_instruction": 64,
+      "fp32_elements_per_instruction": 32
+    },
+
+    "cube_unit": {
+      "cube_m_size": 16,
+      "cube_n_size": 16,
+      "cube_k_size": 16,
+      "note": "16x16x16 矩阵乘单元"
+    },
+
+    "memory": {
+      "ub": {
+        "size_bytes_fuse": 253952,
+        "size_readable_fuse": "248KB",
+        "size_bytes_split": 262144,
+        "size_readable_split": "256KB",
+        "ubblock_size": 32,
+        "ubbank_size": 4096,
+        "ubbank_num": 64,
+        "ubbank_group_num": 16,
+        "ubburst_in_one_block": 32,
+        "note": "fuse 模式 UB=248KB, split 模式 UB=256KB"
+      },
+      "l0a": { "size_bytes": 65536, "size_readable": "64KB" },
+      "l0b": { "size_bytes": 65536, "size_readable": "64KB" },
+      "l0c": { "size_bytes": 131072, "size_readable": "128KB" },
+      "l1": { "size_bytes": 1048576, "size_readable": "1MB" },
+      "l2": { "size_bytes": 4194304, "size_readable": "4MB" }
+    },
+
+    "memory_rates_fuse": {
+      "_comment": "fuse 模式下 AI Core 的搬运速率 (Bytes/cycle)",
+      "ddr_rate": "see variants",
+      "l2_rate": 256,
+      "l2_read_rate": 256,
+      "l2_write_rate": 128,
+      "l1_to_l0_a_rate": 512,
+      "l1_to_l0_b_rate": 256,
+      "l1_to_ub_rate": 128,
+      "l0_c_to_ub_rate": 128,
+      "ub_to_l2_rate": 128,
+      "ub_to_ddr_rate": "see variants",
+      "ub_to_l1_rate": 128
+    },
+
+    "memory_rates_split": {
+      "_comment": "split 模式下 VectorCore 的搬运速率 (Bytes/cycle)",
+      "ddr_rate": "see variants",
+      "l2_rate": 256,
+      "l2_read_rate": 256,
+      "l2_write_rate": 128,
+      "ub_to_l2_rate": 128,
+      "ub_to_ddr_rate": "see variants"
+    },
+
+    "alignment": {
+      "base_alignment_bytes": 32,
+      "block_size_elements": {
+        "fp16": 16,
+        "bf16": 16,
+        "fp32": 8,
+        "int8": 32,
+        "int16": 16,
+        "int32": 8
+      }
+    },
+
+    "features": {
+      "support_fixpipe": true,
+      "sparsity": true
+    },
+
+    "unzip": {
+      "engines": 1,
+      "max_ratios": 32,
+      "channels": 4
+    }
+  },
+
+  "variants": {
+    "_comment": "各子型号差异参数",
+
+    "310B1": {
+      "arch_type": 2,
+      "npu_arch": 3002,
+      "aic_version": "AIC-M-300",
+      "ai_core_cnt": 1,
+      "cube_core_cnt": 1,
+      "vector_core_cnt": 1,
+      "cube_freq_mhz": 1224,
+      "ddr_rate": 17,
+      "ddr_read_rate": 17,
+      "ddr_write_rate": 17,
+      "ub_to_ddr_rate_fuse": 128,
+      "ub_to_ddr_rate_split": 128,
+      "gm_size_bytes": 34359738368,
+      "gm_size_readable": "32GB"
+    },
+
+    "310B2": {
+      "arch_type": 2,
+      "npu_arch": 3002,
+      "aic_version": "AIC-M-300",
+      "ai_core_cnt": 1,
+      "cube_core_cnt": 1,
+      "vector_core_cnt": 1,
+      "cube_freq_mhz": 1224,
+      "ddr_rate": 17,
+      "ddr_read_rate": 17,
+      "ddr_write_rate": 17,
+      "ub_to_ddr_rate_fuse": 128,
+      "ub_to_ddr_rate_split": 128,
+      "gm_size_bytes": null,
+      "gm_size_readable": "unknown"
+    },
+
+    "310B3": {
+      "arch_type": 2,
+      "npu_arch": 3002,
+      "aic_version": "AIC-M-300",
+      "ai_core_cnt": 1,
+      "cube_core_cnt": 1,
+      "vector_core_cnt": 1,
+      "cube_freq_mhz": 1224,
+      "ddr_rate": 17,
+      "ddr_read_rate": 17,
+      "ddr_write_rate": 17,
+      "ub_to_ddr_rate_fuse": 128,
+      "ub_to_ddr_rate_split": 128,
+      "gm_size_bytes": null,
+      "gm_size_readable": "unknown"
+    },
+
+    "310B4": {
+      "arch_type": 2,
+      "npu_arch": 3002,
+      "aic_version": "AIC-M-300",
+      "ai_core_cnt": 1,
+      "cube_core_cnt": 1,
+      "vector_core_cnt": 1,
+      "cube_freq_mhz": 500,
+      "ddr_rate": 8,
+      "ddr_read_rate": 8,
+      "ddr_write_rate": 8,
+      "ub_to_ddr_rate_fuse": 64,
+      "ub_to_ddr_rate_split": 64,
+      "gm_size_bytes": null,
+      "gm_size_readable": "unknown",
+      "note": "低频低功耗版本"
+    }
+  },
+
+  "derived_params": {
+    "calculation_notes": {
+      "bandwidth_per_core_gbps": "rate (Bytes/cycle) x freq (MHz) / 1000 = GB/s",
+      "cube_fp16_tflops_per_core": "16x16x16 x 2 x freq / 1e6 = TFLOPS/core"
+    },
+    "examples": {
+      "310B1_gm_to_ub_per_core_gbps": "ddr_rate(17) x freq(1224) / 1000 = 20.808 GB/s",
+      "310B1_cube_fp16_tflops_per_core": "16x16x16 x 2 x 1224 / 1e6 = 10.03 TFLOPS",
+      "310B4_gm_to_ub_per_core_gbps": "ddr_rate(8) x freq(500) / 1000 = 4.0 GB/s",
+      "310B4_cube_fp16_tflops_per_core": "16x16x16 x 2 x 500 / 1e6 = 4.096 TFLOPS"
+    }
+  },
+
+  "lookup_rule": "检测芯片型号 -> 读 shared 获取通用参数 -> 读 variants[型号] 获取核数/频率/容量 -> 用 derived_params 公式计算带宽和算力"
+}

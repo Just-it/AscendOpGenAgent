@@ -1,0 +1,487 @@
+{
+  "chip_series": "Ascend 910_95xx",
+  "description": "Ascend 910_95xx 系列芯片硬件规格参数（AIC-C-310 新架构），数据来源: platform_config/Ascend910_95*.ini",
+  "data_source": "platform_config/Ascend910_95*.ini",
+
+  "shared": {
+    "_comment": "910_95xx 全系列共享 AIC-C-310 架构, NpuArch=3510, 拆分核设计",
+
+    "ai_core_architecture": {
+      "core_type": "AI Core",
+      "cube_vector_combine": "fuse,split",
+      "core_type_list": ["CubeCore", "VectorCore"],
+      "note": "支持 fuse 和 split 两种模式; vector_core_cnt = 2 x cube_core_cnt"
+    },
+
+    "vector_unit": {
+      "vec_calc_size_bytes": 128,
+      "fp16_elements_per_instruction": 64,
+      "fp32_elements_per_instruction": 32
+    },
+
+    "cube_unit": {
+      "cube_m_size": 16,
+      "cube_n_size": 16,
+      "cube_k_size": 16
+    },
+
+    "memory": {
+      "ub": {
+        "size_bytes": 253952,
+        "size_readable": "248KB",
+        "ubblock_size": 32,
+        "ubbank_size": 4096,
+        "ubbank_num": 16,
+        "ubbank_group_num": 8,
+        "ubburst_in_one_block": 32,
+        "note": "ubbank_num=16, ubbank_group_num=8, 与 910B 的 64/16 不同"
+      },
+      "l0a": { "size_bytes": 65536, "size_readable": "64KB" },
+      "l0b": { "size_bytes": 65536, "size_readable": "64KB" },
+      "l0c": { "size_bytes": 262144, "size_readable": "256KB" },
+      "l1": { "size_bytes": 524288, "size_readable": "512KB" }
+    },
+
+    "memory_rates_cubecore": {
+      "_comment": "CubeCore 搬运速率 (Bytes/cycle)",
+      "l2_rate": 100,
+      "l2_read_rate": 100,
+      "l2_write_rate": 100,
+      "l1_to_l0_a_rate": 256,
+      "l1_to_l0_b_rate": 256,
+      "l1_to_ub_rate": 128,
+      "l0_c_to_ub_rate": 128,
+      "ub_to_l2_rate": 128,
+      "ub_to_ddr_rate": 128,
+      "ub_to_l1_rate": 128,
+      "ddr_rate": "see variants (varies by SKU)"
+    },
+
+    "memory_rates_vectorcore": {
+      "_comment": "VectorCore 搬运速率 (Bytes/cycle), ddr_rate 为 CubeCore 的约一半",
+      "l2_rate": 100,
+      "l2_read_rate": 100,
+      "l2_write_rate": 100,
+      "ub_to_l2_rate": 42,
+      "ub_to_ddr_rate": 40,
+      "ddr_rate": "see variants (约为 CubeCore 的一半)"
+    },
+
+    "alignment": {
+      "base_alignment_bytes": 32,
+      "block_size_elements": {
+        "fp16": 16,
+        "bf16": 16,
+        "fp32": 8,
+        "int8": 32,
+        "int16": 16,
+        "int32": 8
+      }
+    },
+
+    "features": {
+      "support_bf16": true,
+      "support_inf_nan": true,
+      "support_fixpipe": true,
+      "sparsity": false,
+      "note": "910_95xx 系列 sparsity=0"
+    }
+  },
+
+  "variants": {
+    "_comment": "按核数分为 4 个 Tier: 8核/28核/32核/36核, 同 Tier 内差异主要是 ddr_rate/GM 大小/L2 大小",
+
+    "910_950z": {
+      "tier": "8-core",
+      "aic_version": "AIC-C-310",
+      "npu_arch": 3510,
+      "ai_core_cnt": 8,
+      "cube_core_cnt": 8,
+      "vector_core_cnt": 16,
+      "ai_cpu_cnt": 4,
+      "cube_freq_mhz": 1650,
+      "ddr_rate_cube": 4,
+      "ddr_rate_vector": 2,
+      "l2_size_bytes": 16777216,
+      "l2_size_readable": "16MB",
+      "gm_size_bytes": 17179869184,
+      "gm_size_readable": "16GB",
+      "note": "入门级 8 核, 低 DDR 带宽"
+    },
+
+    "910_9572": {
+      "tier": "28-core",
+      "aic_version": "AIC-C-310",
+      "npu_arch": 3510,
+      "ai_core_cnt": 28,
+      "cube_core_cnt": 28,
+      "vector_core_cnt": 56,
+      "ai_cpu_cnt": 6,
+      "cube_freq_mhz": 1650,
+      "ddr_rate_cube": 80,
+      "ddr_rate_vector": 40,
+      "l2_size_bytes": 134217728,
+      "l2_size_readable": "128MB",
+      "gm_size_bytes": 103079215104,
+      "gm_size_readable": "96GB"
+    },
+
+    "910_9574": {
+      "tier": "28-core",
+      "aic_version": "AIC-C-310",
+      "npu_arch": 3510,
+      "ai_core_cnt": 28,
+      "cube_core_cnt": 28,
+      "vector_core_cnt": 56,
+      "ai_cpu_cnt": 4,
+      "cube_freq_mhz": 1650,
+      "ddr_rate_cube": 70,
+      "ddr_rate_vector": 35,
+      "l2_size_bytes": 117440512,
+      "l2_size_readable": "112MB",
+      "gm_size_bytes": 90194313216,
+      "gm_size_readable": "84GB"
+    },
+
+    "910_9575": {
+      "tier": "28-core",
+      "aic_version": "AIC-C-310",
+      "npu_arch": 3510,
+      "ai_core_cnt": 28,
+      "cube_core_cnt": 28,
+      "vector_core_cnt": 56,
+      "ai_cpu_cnt": 6,
+      "cube_freq_mhz": 1650,
+      "ddr_rate_cube": 61,
+      "ddr_rate_vector": 31,
+      "l2_size_bytes": 134217728,
+      "l2_size_readable": "128MB",
+      "gm_size_bytes": 103079215104,
+      "gm_size_readable": "96GB"
+    },
+
+    "910_9576": {
+      "tier": "28-core",
+      "aic_version": "AIC-C-310",
+      "npu_arch": 3510,
+      "ai_core_cnt": 28,
+      "cube_core_cnt": 28,
+      "vector_core_cnt": 56,
+      "ai_cpu_cnt": 6,
+      "cube_freq_mhz": 1650,
+      "ddr_rate_cube": 61,
+      "ddr_rate_vector": 31,
+      "l2_size_bytes": 134217728,
+      "l2_size_readable": "128MB",
+      "gm_size_bytes": 68719476736,
+      "gm_size_readable": "64GB"
+    },
+
+    "910_9577": {
+      "tier": "28-core",
+      "aic_version": "AIC-C-310",
+      "npu_arch": 3510,
+      "ai_core_cnt": 28,
+      "cube_core_cnt": 28,
+      "vector_core_cnt": 56,
+      "ai_cpu_cnt": 4,
+      "cube_freq_mhz": 1650,
+      "ddr_rate_cube": 54,
+      "ddr_rate_vector": 27,
+      "l2_size_bytes": 117440512,
+      "l2_size_readable": "112MB",
+      "gm_size_bytes": 90194313216,
+      "gm_size_readable": "84GB"
+    },
+
+    "910_9578": {
+      "tier": "28-core",
+      "aic_version": "AIC-C-310",
+      "npu_arch": 3510,
+      "ai_core_cnt": 28,
+      "cube_core_cnt": 28,
+      "vector_core_cnt": 56,
+      "ai_cpu_cnt": 4,
+      "cube_freq_mhz": 1650,
+      "ddr_rate_cube": 54,
+      "ddr_rate_vector": 27,
+      "l2_size_bytes": 117440512,
+      "l2_size_readable": "112MB",
+      "gm_size_bytes": 60129542144,
+      "gm_size_readable": "56GB"
+    },
+
+    "910_9579": {
+      "tier": "28-core",
+      "aic_version": "AIC-C-310",
+      "npu_arch": 3510,
+      "ai_core_cnt": 28,
+      "cube_core_cnt": 28,
+      "vector_core_cnt": 56,
+      "ai_cpu_cnt": 8,
+      "cube_freq_mhz": 1650,
+      "ddr_rate_cube": 31,
+      "ddr_rate_vector": 16,
+      "l2_size_bytes": 134217728,
+      "l2_size_readable": "128MB",
+      "gm_size_bytes": 137438953472,
+      "gm_size_readable": "128GB"
+    },
+
+    "910_957b": {
+      "tier": "28-core",
+      "aic_version": "AIC-C-310",
+      "npu_arch": 3510,
+      "ai_core_cnt": 28,
+      "cube_core_cnt": 28,
+      "vector_core_cnt": 56,
+      "ai_cpu_cnt": 6,
+      "cube_freq_mhz": 1650,
+      "ddr_rate_cube": 27,
+      "ddr_rate_vector": 14,
+      "l2_size_bytes": 117440512,
+      "l2_size_readable": "112MB",
+      "gm_size_bytes": 120259084288,
+      "gm_size_readable": "112GB"
+    },
+
+    "910_957c": {
+      "tier": "28-core",
+      "aic_version": "AIC-C-310",
+      "npu_arch": 3510,
+      "ai_core_cnt": 28,
+      "cube_core_cnt": 28,
+      "vector_core_cnt": 56,
+      "ai_cpu_cnt": 4,
+      "cube_freq_mhz": 1650,
+      "ddr_rate_cube": 27,
+      "ddr_rate_vector": 14,
+      "l2_size_bytes": 117440512,
+      "l2_size_readable": "112MB",
+      "gm_size_bytes": 90194313216,
+      "gm_size_readable": "84GB"
+    },
+
+    "910_957d": {
+      "tier": "28-core",
+      "aic_version": "AIC-C-310",
+      "npu_arch": 3510,
+      "ai_core_cnt": 28,
+      "cube_core_cnt": 28,
+      "vector_core_cnt": 56,
+      "ai_cpu_cnt": 4,
+      "cube_freq_mhz": 1650,
+      "ddr_rate_cube": 23,
+      "ddr_rate_vector": 12,
+      "l2_size_bytes": 100663296,
+      "l2_size_readable": "96MB",
+      "gm_size_bytes": 103079215104,
+      "gm_size_readable": "96GB"
+    },
+
+    "910_9581": {
+      "tier": "32-core",
+      "aic_version": "AIC-C-310",
+      "npu_arch": 3510,
+      "ai_core_cnt": 32,
+      "cube_core_cnt": 32,
+      "vector_core_cnt": 64,
+      "ai_cpu_cnt": 8,
+      "cube_freq_mhz": 1650,
+      "ddr_rate_cube": 80,
+      "ddr_rate_vector": 40,
+      "l2_size_bytes": 134217728,
+      "l2_size_readable": "128MB",
+      "gm_size_bytes": 154618822656,
+      "gm_size_readable": "144GB"
+    },
+
+    "910_9582": {
+      "tier": "32-core",
+      "aic_version": "AIC-C-310",
+      "npu_arch": 3510,
+      "ai_core_cnt": 32,
+      "cube_core_cnt": 32,
+      "vector_core_cnt": 64,
+      "ai_cpu_cnt": 8,
+      "cube_freq_mhz": 1650,
+      "ddr_rate_cube": 80,
+      "ddr_rate_vector": 40,
+      "l2_size_bytes": 134217728,
+      "l2_size_readable": "128MB",
+      "gm_size_bytes": 103079215104,
+      "gm_size_readable": "96GB"
+    },
+
+    "910_9584": {
+      "tier": "32-core",
+      "aic_version": "AIC-C-310",
+      "npu_arch": 3510,
+      "ai_core_cnt": 32,
+      "cube_core_cnt": 32,
+      "vector_core_cnt": 64,
+      "ai_cpu_cnt": 6,
+      "cube_freq_mhz": 1650,
+      "ddr_rate_cube": 70,
+      "ddr_rate_vector": 35,
+      "l2_size_bytes": 117440512,
+      "l2_size_readable": "112MB",
+      "gm_size_bytes": 90194313216,
+      "gm_size_readable": "84GB"
+    },
+
+    "910_9587": {
+      "tier": "32-core",
+      "aic_version": "AIC-C-310",
+      "npu_arch": 3510,
+      "ai_core_cnt": 32,
+      "cube_core_cnt": 32,
+      "vector_core_cnt": 64,
+      "ai_cpu_cnt": 6,
+      "cube_freq_mhz": 1650,
+      "ddr_rate_cube": 54,
+      "ddr_rate_vector": 27,
+      "l2_size_bytes": 117440512,
+      "l2_size_readable": "112MB",
+      "gm_size_bytes": 90194313216,
+      "gm_size_readable": "84GB"
+    },
+
+    "910_9588": {
+      "tier": "32-core",
+      "aic_version": "AIC-C-310",
+      "npu_arch": 3510,
+      "ai_core_cnt": 32,
+      "cube_core_cnt": 32,
+      "vector_core_cnt": 64,
+      "ai_cpu_cnt": 6,
+      "cube_freq_mhz": 1650,
+      "ddr_rate_cube": 54,
+      "ddr_rate_vector": 27,
+      "l2_size_bytes": 117440512,
+      "l2_size_readable": "112MB",
+      "gm_size_bytes": 60129542144,
+      "gm_size_readable": "56GB"
+    },
+
+    "910_9589": {
+      "tier": "32-core",
+      "aic_version": "AIC-C-310",
+      "npu_arch": 3510,
+      "ai_core_cnt": 32,
+      "cube_core_cnt": 32,
+      "vector_core_cnt": 64,
+      "ai_cpu_cnt": 8,
+      "cube_freq_mhz": 1650,
+      "ddr_rate_cube": 31,
+      "ddr_rate_vector": 16,
+      "l2_size_bytes": 134217728,
+      "l2_size_readable": "128MB",
+      "gm_size_bytes": 137438953472,
+      "gm_size_readable": "128GB"
+    },
+
+    "910_958a": {
+      "tier": "32-core",
+      "aic_version": "AIC-C-310",
+      "npu_arch": 3510,
+      "ai_core_cnt": 32,
+      "cube_core_cnt": 32,
+      "vector_core_cnt": 64,
+      "ai_cpu_cnt": 8,
+      "cube_freq_mhz": 1650,
+      "ddr_rate_cube": 31,
+      "ddr_rate_vector": 16,
+      "l2_size_bytes": 134217728,
+      "l2_size_readable": "128MB",
+      "gm_size_bytes": 103079215104,
+      "gm_size_readable": "96GB"
+    },
+
+    "910_958b": {
+      "tier": "32-core",
+      "aic_version": "AIC-C-310",
+      "npu_arch": 3510,
+      "ai_core_cnt": 32,
+      "cube_core_cnt": 32,
+      "vector_core_cnt": 64,
+      "ai_cpu_cnt": 6,
+      "cube_freq_mhz": 1650,
+      "ddr_rate_cube": 27,
+      "ddr_rate_vector": 14,
+      "l2_size_bytes": 117440512,
+      "l2_size_readable": "112MB",
+      "gm_size_bytes": 120259084288,
+      "gm_size_readable": "112GB"
+    },
+
+    "910_9591": {
+      "tier": "36-core",
+      "aic_version": "AIC-C-310",
+      "npu_arch": 3510,
+      "ai_core_cnt": 36,
+      "cube_core_cnt": 36,
+      "vector_core_cnt": 72,
+      "ai_cpu_cnt": 8,
+      "cube_freq_mhz": 1800,
+      "ddr_rate_cube": 80,
+      "ddr_rate_vector": 40,
+      "l2_size_bytes": 134217728,
+      "l2_size_readable": "128MB",
+      "gm_size_bytes": 154618822656,
+      "gm_size_readable": "144GB",
+      "note": "最高配 36 核 1800MHz"
+    },
+
+    "910_9592": {
+      "tier": "36-core",
+      "aic_version": "AIC-C-310",
+      "npu_arch": 3510,
+      "ai_core_cnt": 36,
+      "cube_core_cnt": 36,
+      "vector_core_cnt": 72,
+      "ai_cpu_cnt": 8,
+      "cube_freq_mhz": 1800,
+      "ddr_rate_cube": 80,
+      "ddr_rate_vector": 40,
+      "l2_size_bytes": 134217728,
+      "l2_size_readable": "128MB",
+      "gm_size_bytes": 103079215104,
+      "gm_size_readable": "96GB"
+    },
+
+    "910_9599": {
+      "tier": "36-core",
+      "aic_version": "AIC-C-310",
+      "npu_arch": 3510,
+      "ai_core_cnt": 36,
+      "cube_core_cnt": 36,
+      "vector_core_cnt": 72,
+      "ai_cpu_cnt": 8,
+      "cube_freq_mhz": 1800,
+      "ddr_rate_cube": 31,
+      "ddr_rate_vector": 16,
+      "l2_size_bytes": 134217728,
+      "l2_size_readable": "128MB",
+      "gm_size_bytes": 137438953472,
+      "gm_size_readable": "128GB"
+    }
+  },
+
+  "derived_params": {
+    "calculation_notes": {
+      "bandwidth_per_core_gbps": "ddr_rate_cube (Bytes/cycle) x freq (MHz) / 1000 = GB/s",
+      "cube_fp16_tflops_per_core": "16x16x16 x 2 x freq / 1e6 = TFLOPS/core",
+      "vector_fp16_tflops_per_core": "128B / 2B x freq x 2(FMA) / 1e6 = TFLOPS/core"
+    },
+    "examples": {
+      "9591_gm_to_ub_per_core_gbps": "ddr_rate_cube(80) x freq(1800) / 1000 = 144.0 GB/s per core",
+      "9591_cube_fp16_tflops_per_core": "16x16x16 x 2 x 1800 / 1e6 = 14.746 TFLOPS",
+      "9591_cube_fp16_aggregate_tflops": "14.746 x 36 = 530.841 TFLOPS",
+      "950z_gm_to_ub_per_core_gbps": "ddr_rate_cube(4) x freq(1650) / 1000 = 6.6 GB/s per core",
+      "950z_cube_fp16_aggregate_tflops": "16x16x16 x 2 x 1650 / 1e6 x 8 = 108.04 TFLOPS"
+    }
+  },
+
+  "lookup_rule": "检测芯片型号 -> 匹配 tier -> 读 shared 获取通用参数 -> 读 variants[型号] 获取核数/频率/ddr_rate/容量 -> 注意区分 CubeCore 和 VectorCore 的 ddr_rate"
+}

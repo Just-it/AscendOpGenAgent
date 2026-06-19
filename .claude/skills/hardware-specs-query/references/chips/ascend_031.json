@@ -1,0 +1,85 @@
+{
+  "chip_series": "Ascend 031",
+  "description": "Ascend 031 芯片硬件规格参数（微型 NPU），数据来源: platform_config/Ascend031.ini",
+  "data_source": "platform_config/Ascend031.ini",
+
+  "shared": {
+    "ai_core_architecture": {
+      "core_type": "AI Core",
+      "core_type_list": ["AICore", "VectorCore", "CubeCore"],
+      "cube_vector_combine": "fuse,split",
+      "ai_core_cnt": 1,
+      "vector_core_cnt": 1,
+      "ai_cpu_cnt": 4,
+      "note": "微型 NPU (AIC-T-300), 支持 fuse/split"
+    },
+
+    "vector_unit": {
+      "vec_calc_size_bytes_fuse": 16,
+      "vec_calc_size_bytes_split": 128,
+      "note": "fuse 模式 vec_calc_size=16, split 模式 vec_calc_size=128"
+    },
+
+    "cube_unit": {
+      "cube_m_size": 16,
+      "cube_n_size": 16,
+      "cube_k_size": 16
+    },
+
+    "memory": {
+      "ub": {
+        "size_bytes": 30720,
+        "size_readable": "30KB",
+        "ubblock_size": 32,
+        "ubbank_size": 4096,
+        "ubbank_num": 8,
+        "ubbank_group_num": 2,
+        "ubburst_in_one_block": 32,
+        "note": "极小 UB, 仅 30KB, ubbank_num=8"
+      },
+      "l0a": { "size_bytes": 8192, "size_readable": "8KB" },
+      "l0b": { "size_bytes": 8192, "size_readable": "8KB" },
+      "l0c": { "size_bytes": 16384, "size_readable": "16KB" },
+      "l1": { "size_bytes": 65536, "size_readable": "64KB" },
+      "l2": { "size_bytes": 4194304, "size_readable": "4MB" }
+    },
+
+    "memory_rates_fuse": {
+      "ddr_rate": 17, "ddr_read_rate": 17, "ddr_write_rate": 17,
+      "l2_rate": 256, "l2_read_rate": 256, "l2_write_rate": 128,
+      "l1_to_l0_a_rate": 512, "l1_to_l0_b_rate": 256,
+      "l1_to_ub_rate": 128, "l0_c_to_ub_rate": 128,
+      "ub_to_l2_rate": 128, "ub_to_ddr_rate": 128, "ub_to_l1_rate": 128
+    },
+
+    "memory_rates_split": {
+      "ddr_rate": 17, "ddr_read_rate": 17, "ddr_write_rate": 17,
+      "l2_rate": 256, "l2_read_rate": 256, "l2_write_rate": 128,
+      "ub_to_l2_rate": 128, "ub_to_ddr_rate": 128
+    },
+
+    "features": {
+      "support_fixpipe": true
+    },
+
+    "unzip": {
+      "engines": 4,
+      "max_ratios": 64,
+      "channels": 2
+    }
+  },
+
+  "variants": {
+    "031": {
+      "arch_type": 8,
+      "npu_arch": 3004,
+      "aic_version": "AIC-T-300",
+      "cube_freq_mhz": 330,
+      "gm_size_bytes": null,
+      "gm_size_readable": "unknown",
+      "note": "极小规格: UB=30KB, L0A/B=8KB, L0C=16KB, L1=64KB"
+    }
+  },
+
+  "lookup_rule": "单型号芯片; 注意极小的 memory 规格, tiling 需要特别精细"
+}
